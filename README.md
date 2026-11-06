@@ -91,6 +91,8 @@ npm --prefix frontend run build
 - Container deployment supported via infra/k8s
 - Ensure SECRET_KEY and DATABASE_URL are provided from secrets
 - Keep ALLOW_CODE_EXECUTION=false unless you have strong sandbox isolation
+- If code execution is enabled, also set EXECUTION_SANDBOX_CONFIRMED=true only when
+  the worker is deployed inside an independently isolated sandbox.
 
 ### Frontend (Vercel)
 

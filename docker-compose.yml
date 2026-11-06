@@ -11,7 +11,7 @@ services:
       KAGGLE_USERNAME: ${KAGGLE_USERNAME:-}
       KAGGLE_KEY: ${KAGGLE_KEY:-}
       DATABASE_URL: ${DATABASE_URL:-sqlite:///./app.db}
-      SECRET_KEY: ${SECRET_KEY:-dev-local-9f4e1d2c7a8b3f6e}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set}
       ENFORCE_API_KEY: ${ENFORCE_API_KEY:-true}
       ENFORCE_TENANT_ISOLATION: ${ENFORCE_TENANT_ISOLATION:-true}
       ALLOW_CODE_EXECUTION: ${ALLOW_CODE_EXECUTION:-false}
@@ -24,7 +24,7 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
-        VITE_API_KEY: ${VITE_API_KEY:-dev-local-9f4e1d2c7a8b3f6e}
+        VITE_API_KEY: ${VITE_API_KEY:?VITE_API_KEY must be set}
         VITE_TENANT_ID: ${VITE_TENANT_ID:-prod-tenant-1}
     container_name: dsra-frontend
     ports:

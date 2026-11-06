@@ -374,11 +374,14 @@ function AutoML({ dataset, setDataset }) {
             const backendDatasetId = await ensureDatasetOnBackend()
 
             const apiUrl = import.meta.env.VITE_API_URL || ''
-            const API_KEY = import.meta.env.VITE_API_KEY || 'dev-local-9f4e1d2c7a8b3f6e'
+            const API_KEY = import.meta.env.VITE_API_KEY || ''
+            const tenantId = import.meta.env.VITE_TENANT_ID
+                || window.localStorage.getItem('tenant_id')
+                || 'public'
             const authHeaders = {
                 'Content-Type': 'application/json',
                 'X-API-Key': API_KEY,
-                'X-Tenant-Id': 'public',
+                'X-Tenant-Id': tenantId,
             }
 
             let response
@@ -433,7 +436,11 @@ function AutoML({ dataset, setDataset }) {
             const normalized = {
                 ...payload,
                 taskType: payload.taskType || payload.task_type || (config.workflow === 'clustering' ? 'clustering' : config.modelMode),
-                selectedModel: config.workflow === 'selected' ? config.modelName : (payload.best_model_name || payload.model_name || config.modelName),
+                selectedModel: config.workflow === 'clustering'
+                    ? (payload.model_name || payload.best_model_name || payload.models?.[0]?.type || 'Clustering model')
+                    : config.workflow === 'selected'
+                        ? config.modelName
+                        : (payload.best_model_name || payload.model_name || config.modelName),
                 selectedX: config.xColumns,
                 selectedY: config.yColumns,
                 dataset_id: backendDatasetId,

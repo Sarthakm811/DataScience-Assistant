@@ -1,5 +1,5 @@
 """Comprehensive upload test — checks every failure mode."""
-import json, urllib.request, urllib.error, io, os
+import json, sys, urllib.request, urllib.error
 
 BASE = "http://localhost:8000"
 H = {"X-API-Key": "dev-local-9f4e1d2c7a8b3f6e", "X-Tenant-Id": "public"}
@@ -37,7 +37,10 @@ def upload(content: bytes, filename: str, content_type: str = "text/csv"):
 
 # ── 1. Normal CSV ─────────────────────────────────────────────────────────────
 print("\n=== 1. Normal CSV upload ===")
-csv = b"name,age,salary,dept\nAlice,25,50000,Eng\nBob,30,60000,Mkt\nCharlie,35,75000,Eng\n" * 20
+csv = (
+    b"name,age,salary,dept\n"
+    + b"Alice,25,50000,Eng\nBob,30,60000,Mkt\nCharlie,35,75000,Eng\n" * 20
+)
 res, err = upload(csv, "employees.csv")
 if err:
     print(f"  [FAIL] {err}"); failed += 1
@@ -115,3 +118,4 @@ check("error not generic", err8 and "Failed to upload dataset" not in err8, err8
 
 print(f"\n{'='*45}")
 print(f"Results: {passed} passed, {failed} failed")
+sys.exit(1 if failed else 0)

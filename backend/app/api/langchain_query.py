@@ -2,12 +2,14 @@
 
 from fastapi import APIRouter, HTTPException
 import uuid
+import logging
 
 from app.schemas.query import QueryRequest, QueryResponse
 from app.runtime_state import DATASETS
 from app.services.dataset_context import format_dataframe_context
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/query/langchain", response_model=QueryResponse)
@@ -18,10 +20,11 @@ async def query_with_langchain(req: QueryRequest):
         # Lazy import so a version mismatch doesn't crash the whole server at startup
         try:
             from app.services.langchain_agent import LangChainAgent
-        except Exception as import_err:
+        except Exception:
+            logger.exception("LangChain agent import failed")
             raise HTTPException(
                 status_code=503,
-                detail=f"LangChain agent unavailable (dependency issue): {import_err}"
+                detail="LangChain agent is unavailable",
             )
 
         agent = LangChainAgent()
@@ -38,5 +41,6 @@ async def query_with_langchain(req: QueryRequest):
         )
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("LangChain query failed for session %s", req.session_id)
+        raise HTTPException(status_code=500, detail="LangChain query processing failed")

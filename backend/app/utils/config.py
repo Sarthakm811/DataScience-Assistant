@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from pydantic import ConfigDict, model_validator
+from pydantic import ConfigDict, Field, model_validator
 from typing import Optional
 
 
@@ -19,8 +19,12 @@ class Settings(BaseSettings):
     allow_code_execution: bool = False
 
     # Execution limits
-    max_execution_time: int = 45
-    max_memory_mb: int = 1536
+    max_execution_time: int = Field(default=45, ge=1, le=3600)
+    max_memory_mb: int = Field(default=1536, ge=128, le=16384)
+    max_upload_size_mb: int = Field(default=50, ge=1, le=1024)
+    max_upload_rows: int = Field(default=1_000_000, ge=1, le=10_000_000)
+    max_upload_columns: int = Field(default=500, ge=1, le=10_000)
+    max_image_pixels: int = Field(default=25_000_000, ge=1, le=100_000_000)
 
     # Vector DB
     vector_db_url: Optional[str] = None
@@ -39,12 +43,12 @@ class Settings(BaseSettings):
             "",
             "MISSING_GEMINI_API_KEY",
         }
-        # We only log or provide a warning during initialization.
-        # API endpoints will fail when used if these are still weak.
+        if self.enforce_api_key and self.secret_key in weak_values:
+            raise ValueError("SECRET_KEY must be explicitly configured when API-key enforcement is enabled")
         if self.secret_key in weak_values or self.gemini_api_key in weak_values:
             import logging
             logger = logging.getLogger(__name__)
-            logger.warning("CRITICAL: Application initialized with missing or default secrets (GEMINI_API_KEY or SECRET_KEY).")
+            logger.warning("Application initialized with a missing or default optional secret")
         return self
 
 

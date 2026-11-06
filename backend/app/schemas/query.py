@@ -1,11 +1,11 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
 
 
 class QueryRequest(BaseModel):
-    session_id: str
-    query: str
-    dataset_id: Optional[str] = None
+    session_id: str = Field(min_length=1, max_length=128, pattern=r"\S")
+    query: str = Field(min_length=1, max_length=20_000, pattern=r"\S")
+    dataset_id: Optional[str] = Field(default=None, max_length=255, pattern=r"\S")
 
 
 class QueryResponse(BaseModel):
@@ -20,7 +20,7 @@ class QueryResponse(BaseModel):
 
 
 class SessionCreate(BaseModel):
-    user_id: Optional[str] = None
+    user_id: Optional[str] = Field(default=None, max_length=255, pattern=r"\S")
 
 
 class SessionResponse(BaseModel):

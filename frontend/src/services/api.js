@@ -5,7 +5,7 @@
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 const API_V1 = `${API_BASE_URL}/api`;
-const API_KEY = import.meta.env.VITE_API_KEY || 'dev-local-9f4e1d2c7a8b3f6e';
+const API_KEY = import.meta.env.VITE_API_KEY || '';
 
 function resolveTenantId() {
     if (typeof window === 'undefined') return import.meta.env.VITE_TENANT_ID || null
@@ -291,7 +291,7 @@ export const mlAPI = {
     async predictWithModel(datasetId, modelId, data) {
         const response = await fetch(`${API_V1}/predict`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getHeaders(),
             body: JSON.stringify({ dataset_id: datasetId, model_id: modelId, data })
         });
         await throwIfNotOk(response, 'Failed to make prediction')

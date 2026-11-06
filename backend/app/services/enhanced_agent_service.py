@@ -104,9 +104,17 @@ class EnhancedAgentService:
 
             return results
 
-        except Exception as e:
-            logger.error(f"Error in job {job_id}: {str(e)}", exc_info=True)
-            return {"job_id": job_id, "status": "failed", "error": str(e)}
+        except Exception as exc:
+            logger.error(
+                "Comprehensive analysis failed: job_id=%s error_type=%s",
+                job_id,
+                type(exc).__name__,
+            )
+            return {
+                "job_id": job_id,
+                "status": "failed",
+                "error": "Comprehensive analysis failed.",
+            }
 
     def _detect_target_column(self, query: str, df: pd.DataFrame) -> Optional[str]:
         """Detect target column from query"""

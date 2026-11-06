@@ -26,6 +26,12 @@ class ExecutionTool:
                 "status": "disabled",
                 "error": "Code execution is disabled by server policy. Set ALLOW_CODE_EXECUTION=true to enable.",
             }
+        if os.getenv("EXECUTION_SANDBOX_CONFIRMED", "").lower() != "true":
+            logger.error("Code execution requested without a confirmed isolated sandbox")
+            return {
+                "status": "disabled",
+                "error": "Code execution requires an explicitly configured isolated sandbox.",
+            }
 
         # Create temp workspace
         with tempfile.TemporaryDirectory() as workdir:
@@ -67,9 +73,16 @@ class ExecutionTool:
                     "status": "timeout",
                     "error": f"Execution exceeded {self.max_time}s limit",
                 }
-            except Exception as e:
-                logger.error(f"Execution error for job {job_id}: {str(e)}")
-                return {"status": "error", "error": str(e)}
+            except Exception as exc:
+                logger.error(
+                    "Execution failed: job_id=%s error_type=%s",
+                    job_id,
+                    type(exc).__name__,
+                )
+                return {
+                    "status": "error",
+                    "error": "Code execution failed.",
+                }
 
     def _wrap_code(self, code: str, dataset_id: str, outputs_dir: str) -> str:
         """Wrap user code with safety and data loading"""

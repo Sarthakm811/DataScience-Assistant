@@ -80,14 +80,7 @@ async def call_tool(tool_id: str, request: ToolCallRequest):
     if not valid:
         raise HTTPException(status_code=400, detail=error)
 
-    # TODO: Create task and publish to orchestrator
-    # For now, return mock response
-    import uuid
-
-    task_id = str(uuid.uuid4())
-
-    return ToolCallResponse(
-        task_id=task_id,
-        status="queued",
-        message=f"Tool {tool_id} call queued for execution",
+    raise HTTPException(
+        status_code=501,
+        detail="Tool execution is not configured in this deployment",
     )

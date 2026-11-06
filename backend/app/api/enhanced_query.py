@@ -3,26 +3,28 @@
 from __future__ import annotations
 
 import uuid
+import logging
 from typing import Any, Dict, Optional
 
 import google.generativeai as genai
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.runtime_state import DATASETS, eda_engine, ml_engine
 from app.services.dataset_context import format_dataframe_context
 from app.utils.config import settings
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class EnhancedQueryRequest(BaseModel):
-	session_id: str
-	query: str
-	dataset_id: Optional[str] = None
+	session_id: str = Field(min_length=1, max_length=128, pattern=r"\S")
+	query: str = Field(min_length=1, max_length=20_000, pattern=r"\S")
+	dataset_id: Optional[str] = Field(default=None, max_length=255, pattern=r"\S")
 	auto_eda: bool = True
 	auto_ml: bool = False
-	target_column: Optional[str] = None
+	target_column: Optional[str] = Field(default=None, max_length=255)
 
 
 @router.post("/query/enhanced")
@@ -59,7 +61,15 @@ async def query_enhanced(req: EnhancedQueryRequest) -> Dict[str, Any]:
 				"models": ml_results.get("models", []),
 			}
 		except Exception as exc:
-			result["ml"] = {"status": "skipped", "reason": str(exc)}
+			logger.error(
+			    "AutoML failed: dataset_id=%s error_type=%s",
+			    req.dataset_id,
+			    type(exc).__name__,
+			)
+			result["ml"] = {
+			    "status": "skipped",
+			    "reason": "Automatic model training was unavailable.",
+			}
 
 	prompt = f"""You are a data science assistant.
 
@@ -77,8 +87,9 @@ Write a concise, evidence-based answer grounded in the dataset above."""
 		model = genai.GenerativeModel("models/gemini-2.0-flash")
 		response = model.generate_content(prompt)
 		explanation = getattr(response, "text", "") or ""
-	except Exception as exc:
-		explanation = f"Generated analysis from live dataset context. Gemini unavailable: {exc}"
+	except Exception:
+		logger.exception("Gemini explanation failed for dataset %s", req.dataset_id)
+		explanation = "Generated analysis from the live dataset context. The AI explanation service is unavailable."
 
 	result["explanation"] = explanation
 	result["dataset_context"] = live_context

@@ -132,9 +132,15 @@ Thought: {agent_scratchpad}
                 "output": result.get("output", ""),
                 "intermediate_steps": result.get("intermediate_steps", []),
             }
-        except Exception as e:
-            logger.error(f"LangChain agent error: {str(e)}")
-            return {"status": "error", "error": str(e)}
+        except Exception as exc:
+            logger.error(
+                "LangChain agent failed: error_type=%s",
+                type(exc).__name__,
+            )
+            return {
+                "status": "error",
+                "error": "LangChain query processing failed.",
+            }
 
     # Sync wrappers for tools (LangChain requires sync functions)
     def _search_datasets_sync(self, query: str) -> str:

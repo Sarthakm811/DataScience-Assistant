@@ -9,6 +9,7 @@ from app.services.dataset_context import format_dataframe_context
 from app.services.session_store import get_store
 from app.tools.kaggle_tool import KaggleTool
 from app.tools.execution_tool import ExecutionTool
+from app.utils.reliability import validate_non_empty_text
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,8 @@ class AgentService:
         job_id = str(uuid.uuid4())
 
         try:
+            validate_non_empty_text(session_id, "session_id", 128)
+            validate_non_empty_text(query, "query", 20_000)
             history = self.store.get_history(session_id, limit=5)
             session_data = self.store.get_session(session_id) or {}
 
@@ -74,9 +77,17 @@ class AgentService:
                 "explanation": explanation,
             }
 
-        except Exception as e:
-            logger.error(f"Error in job {job_id}: {str(e)}")
-            return {"job_id": job_id, "status": "failed", "error": str(e)}
+        except Exception as exc:
+            logger.error(
+                "Agent job failed: job_id=%s error_type=%s",
+                job_id,
+                type(exc).__name__,
+            )
+            return {
+                "job_id": job_id,
+                "status": "failed",
+                "error": "Query processing failed.",
+            }
 
     def _build_prompt(self, query: str, dataset_summary: str, history: list) -> str:
         context = "\n".join(

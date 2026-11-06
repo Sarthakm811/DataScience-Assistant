@@ -13,6 +13,7 @@ import pickle
 import re
 import time
 import uuid
+import logging
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
@@ -22,7 +23,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split, StratifiedKFold, KFold, cross_val_score
 from sklearn.multioutput import MultiOutputClassifier, MultiOutputRegressor
@@ -31,11 +32,14 @@ from sklearn.metrics import confusion_matrix, roc_auc_score, roc_curve
 
 from app.explainability import ModelExplainer
 from app.security import bind_tenant_context, require_api_key
+from app.utils.config import settings
+from app.utils.reliability import validate_dataframe
 from app.runtime_state import (
     CHAT_HISTORY,
     DATASETS,
     PREPROCESSORS,
     TRAINED_MODELS,
+    TenantScopedDict,
     eda_engine,
     ml_engine,
     read_uploaded_dataframe,
@@ -43,31 +47,32 @@ from app.runtime_state import (
 from app.preprocessing import DataPreprocessor
 
 router = APIRouter(tags=["runtime"], dependencies=[Depends(require_api_key), Depends(bind_tenant_context)])
+logger = logging.getLogger(__name__)
 
 # In-memory report history store: session_id -> list of report metadata
-REPORT_HISTORY: Dict[str, List[Dict[str, Any]]] = {}
+REPORT_HISTORY: TenantScopedDict[str, List[Dict[str, Any]]] = TenantScopedDict()
 
 
 class TrainRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    dataset_id: str = Field(alias="datasetId")
-    target_column: str = Field(alias="targetColumn")
-    task_type: str = Field(default="auto", alias="taskType")
+    dataset_id: str = Field(min_length=1, max_length=255, pattern=r"\S", alias="datasetId")
+    target_column: str = Field(min_length=1, max_length=255, pattern=r"\S", alias="targetColumn")
+    task_type: str = Field(default="auto", min_length=1, max_length=32, pattern=r"\S", alias="taskType")
     use_gpu: bool = Field(default=True, alias="useGpu")
     hyperparameter_tuning: bool = Field(default=False, alias="hyperparameterTuning")
-    n_trials: int = Field(default=50, alias="nTrials")
-    cv_folds: int = Field(default=5, alias="cvFolds")
-    test_size: float = Field(default=0.2, alias="testSize")
+    n_trials: int = Field(default=50, ge=1, le=500, alias="nTrials")
+    cv_folds: int = Field(default=5, ge=2, le=20, alias="cvFolds")
+    test_size: float = Field(default=0.2, gt=0.0, lt=1.0, alias="testSize")
 
 
 class SelectedModelTrainRequest(BaseModel):
-    dataset_id: str
-    model_name: str
-    x_columns: List[str]
-    y_columns: List[str]
-    task_type: str = "auto"
-    test_size: float = 0.2
+    dataset_id: str = Field(min_length=1, max_length=255, pattern=r"\S")
+    model_name: str = Field(min_length=1, max_length=128, pattern=r"\S")
+    x_columns: List[str] = Field(min_length=1, max_length=500)
+    y_columns: List[str] = Field(min_length=1, max_length=100)
+    task_type: str = Field(default="auto", min_length=1, max_length=32)
+    test_size: float = Field(default=0.2, gt=0.0, lt=1.0)
     random_state: int = 42
 
 
@@ -81,49 +86,53 @@ class PreprocessRequest(BaseModel):
 
 
 class PredictRequest(BaseModel):
-    dataset_id: str
-    model_id: str
-    data: List[Dict[str, Any]]
+    dataset_id: str = Field(min_length=1, max_length=255, pattern=r"\S")
+    model_id: str = Field(min_length=1, max_length=255, pattern=r"\S")
+    data: List[Dict[str, Any]] = Field(min_length=1, max_length=100_000)
 
 
 class ChatRequest(BaseModel):
-    message: str
-    dataset_id: Optional[str] = None
-    session_id: Optional[str] = None
+    message: str = Field(min_length=1, max_length=20_000, pattern=r"\S")
+    dataset_id: Optional[str] = Field(default=None, max_length=255, pattern=r"\S")
+    session_id: Optional[str] = Field(default=None, max_length=128, pattern=r"\S")
 
 
 class QueryRequest(BaseModel):
-    session_id: str
-    query: str
-    dataset_id: Optional[str] = None
+    session_id: str = Field(min_length=1, max_length=128, pattern=r"\S")
+    query: str = Field(min_length=1, max_length=20_000, pattern=r"\S")
+    dataset_id: Optional[str] = Field(default=None, max_length=255, pattern=r"\S")
 
 
 class AutoAnalysisRequest(BaseModel):
-    session_id: str
-    dataset_id: str
-    analysis_type: str = "full"
-    target_column: Optional[str] = None
-    model_type: str = "auto"
+    session_id: str = Field(min_length=1, max_length=128, pattern=r"\S")
+    dataset_id: str = Field(min_length=1, max_length=255, pattern=r"\S")
+    analysis_type: str = Field(default="full", min_length=1, max_length=32)
+    target_column: Optional[str] = Field(default=None, max_length=255)
+    model_type: str = Field(default="auto", min_length=1, max_length=32)
 
 
 class ClusterRequest(BaseModel):
-    dataset_id: str
-    x_columns: Optional[List[str]] = None
-    algorithm: str = "kmeans"
-    n_clusters: int = 3
-    eps: float = 0.5
-    min_samples: int = 5
+    dataset_id: str = Field(min_length=1, max_length=255)
+    x_columns: Optional[List[str]] = Field(default=None, max_length=500)
+    algorithm: str = Field(default="kmeans", min_length=1, max_length=32)
+    n_clusters: int = Field(default=3, ge=2, le=100)
+    eps: float = Field(default=0.5, gt=0.0, le=100.0)
+    min_samples: int = Field(default=5, ge=1, le=1000)
 
 
 class KaggleSearchRequest(BaseModel):
-    query: str
-    page: int = 1
+    query: str = Field(min_length=1, max_length=500)
+    page: int = Field(default=1, ge=1, le=1000)
     kaggle_username: Optional[str] = None
     kaggle_key: Optional[str] = None
 
 
 class KaggleDownloadRequest(BaseModel):
-    dataset_ref: str
+    dataset_ref: str = Field(
+        min_length=3,
+        max_length=255,
+        pattern=r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+    )
     kaggle_username: Optional[str] = None
     kaggle_key: Optional[str] = None
 
@@ -159,10 +168,20 @@ class DataCleaningRequest(BaseModel):
 
 
 class FeatureEngineeringSaveRequest(BaseModel):
-    headers: List[str]
-    rows: List[Dict[str, Any]]
-    name: Optional[str] = None
-    notes: List[str] = Field(default_factory=list)
+    headers: List[str] = Field(min_length=1, max_length=500)
+    rows: List[Dict[str, Any]] = Field(min_length=1, max_length=1_000_000)
+    name: Optional[str] = Field(default=None, max_length=255)
+    notes: List[str] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_headers(self):
+        normalized = [header.strip() for header in self.headers]
+        if any(not header for header in normalized):
+            raise ValueError("Dataset headers cannot be empty")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("Dataset headers must be unique")
+        self.headers = normalized
+        return self
 
 
 class StatisticsMathRequest(BaseModel):
@@ -172,18 +191,18 @@ class StatisticsMathRequest(BaseModel):
     categorical_column: Optional[str] = None
     time_column: Optional[str] = None
     probability_value: Optional[float] = None
-    confidence_level: float = 0.95
+    confidence_level: float = Field(default=0.95, gt=0.0, lt=1.0)
     ab_group_column: Optional[str] = None
     ab_outcome_column: Optional[str] = None
     control_label: Optional[str] = None
     variant_label: Optional[str] = None
-    prior_alpha: float = 1.0
-    prior_beta: float = 1.0
-    arima_order: List[int] = Field(default_factory=lambda: [1, 1, 1])
-    sarima_order: List[int] = Field(default_factory=lambda: [1, 1, 1])
-    seasonal_order: List[int] = Field(default_factory=lambda: [1, 1, 1])
-    seasonal_period: int = 12
-    forecast_steps: int = 12
+    prior_alpha: float = Field(default=1.0, gt=0.0, le=1_000_000.0)
+    prior_beta: float = Field(default=1.0, gt=0.0, le=1_000_000.0)
+    arima_order: List[int] = Field(default_factory=lambda: [1, 1, 1], min_length=3, max_length=3)
+    sarima_order: List[int] = Field(default_factory=lambda: [1, 1, 1], min_length=3, max_length=3)
+    seasonal_order: List[int] = Field(default_factory=lambda: [1, 1, 1], min_length=3, max_length=3)
+    seasonal_period: int = Field(default=12, ge=2, le=365)
+    forecast_steps: int = Field(default=12, ge=1, le=365)
     matrix_columns: Optional[List[str]] = None
     vector_columns: Optional[List[str]] = None
 
@@ -988,7 +1007,8 @@ def statistics_math_analysis(request: StatisticsMathRequest) -> Dict[str, Any]:
                     "forecast": [float(v) for v in np.asarray(arima_forecast).tolist()],
                 }
             except Exception as exc:
-                time_series["arima"] = {"error": str(exc)}
+                logger.error("ARIMA forecast failed: error_type=%s", type(exc).__name__)
+                time_series["arima"] = {"error": "ARIMA forecast unavailable."}
 
             try:
                 sarima_fit = SARIMAX(
@@ -1007,7 +1027,8 @@ def statistics_math_analysis(request: StatisticsMathRequest) -> Dict[str, Any]:
                     "forecast": [float(v) for v in np.asarray(sarima_forecast).tolist()],
                 }
             except Exception as exc:
-                time_series["sarima"] = {"error": str(exc)}
+                logger.error("SARIMA forecast failed: error_type=%s", type(exc).__name__)
+                time_series["sarima"] = {"error": "SARIMA forecast unavailable."}
         else:
             warnings.append("Time series analysis skipped: need at least 20 valid timestamped observations.")
 
@@ -1081,20 +1102,43 @@ def statistics_math_analysis(request: StatisticsMathRequest) -> Dict[str, Any]:
 @router.post("/datasets/upload")
 async def upload_dataset(file: UploadFile = File(...)) -> Dict[str, Any]:
     try:
-        content = await file.read()
+        max_bytes = settings.max_upload_size_mb * 1024 * 1024
+        content = await file.read(max_bytes + 1)
 
         # Reject empty files immediately
         if not content:
             raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+        if len(content) > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Uploaded file exceeds the {settings.max_upload_size_mb} MB limit.",
+            )
 
-        df = read_uploaded_dataframe(file, content)
+        try:
+            df = validate_dataframe(read_uploaded_dataframe(file, content))
+        except ValueError as exc:
+            if "at least one data row" in str(exc):
+                raise HTTPException(
+                    status_code=400,
+                    detail="File parsed successfully but contains no data rows.",
+                ) from exc
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        if df.empty:
-            raise HTTPException(status_code=400, detail="File parsed successfully but contains no data rows.")
+        if len(df) > settings.max_upload_rows:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Uploaded dataset exceeds the {settings.max_upload_rows} row limit.",
+            )
+        if len(df.columns) > settings.max_upload_columns:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Uploaded dataset exceeds the {settings.max_upload_columns} column limit.",
+            )
 
         # Use a UUID suffix to avoid ID collisions on concurrent uploads
         import uuid as _uuid
-        stem = (file.filename or "dataset").rsplit(".", 1)[0][:40]  # cap stem length
+        stem = re.sub(r"[^A-Za-z0-9_-]+", "_", (file.filename or "dataset").rsplit(".", 1)[0])
+        stem = stem.strip("_")[:40] or "dataset"
         dataset_id = f"ds_{_uuid.uuid4().hex[:8]}_{stem}"
         DATASETS[dataset_id] = df
 
@@ -1113,7 +1157,15 @@ async def upload_dataset(file: UploadFile = File(...)) -> Dict[str, Any]:
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Upload failed: {exc}") from exc
+        logger.error(
+            "Dataset upload failed: error_type=%s filename_present=%s",
+            type(exc).__name__,
+            bool(file.filename),
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Upload could not be completed. Please verify the file and try again.",
+        ) from exc
 
 
 @router.get("/dataset/{dataset_id}")
@@ -1174,8 +1226,7 @@ def clean_dataset(dataset_id: str, request: DataCleaningRequest) -> Dict[str, An
     base_df = DATASETS[dataset_id]
     cleaned_df, summary = _clean_dataframe(base_df, request)
 
-    suffix = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    cleaned_id = f"{dataset_id}_cleaned_{suffix}"
+    cleaned_id = f"{dataset_id}_cleaned_{uuid.uuid4().hex[:12]}"
     DATASETS[cleaned_id] = cleaned_df
 
     return {
@@ -1206,7 +1257,14 @@ def save_feature_engineered_dataset(dataset_id: str, request: FeatureEngineering
     try:
         engineered_df = pd.DataFrame(request.rows)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid engineered rows payload: {exc}") from exc
+        logger.error(
+            "Engineered rows conversion failed: error_type=%s",
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid engineered rows payload.",
+        ) from exc
 
     missing_headers = [h for h in request.headers if h not in engineered_df.columns]
     if missing_headers:
@@ -1217,8 +1275,7 @@ def save_feature_engineered_dataset(dataset_id: str, request: FeatureEngineering
 
     engineered_df = engineered_df[request.headers].copy()
 
-    suffix = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    engineered_id = f"{dataset_id}_features_{suffix}"
+    engineered_id = f"{dataset_id}_features_{uuid.uuid4().hex[:12]}"
     DATASETS[engineered_id] = engineered_df
 
     base_name = (request.name or f"{dataset_id}_engineered").strip() or f"{dataset_id}_engineered"
@@ -1836,7 +1893,8 @@ def analysis_auto(req: AutoAnalysisRequest) -> Dict[str, Any]:
         try:
             result["eda"] = eda_engine.full_analysis(df)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"EDA analysis failed: {exc}") from exc
+            logger.error("EDA analysis failed: error_type=%s", type(exc).__name__)
+            raise HTTPException(status_code=500, detail="EDA analysis failed.") from exc
 
     if req.analysis_type == "ml":
         if not req.target_column:
@@ -1860,7 +1918,8 @@ def analysis_auto(req: AutoAnalysisRequest) -> Dict[str, Any]:
                     "models": ml.get("models", []),
                 }
             except Exception as exc:
-                raise HTTPException(status_code=500, detail=f"ML training failed: {exc}") from exc
+                logger.error("ML training failed: error_type=%s", type(exc).__name__)
+                raise HTTPException(status_code=500, detail="ML training failed.") from exc
 
     return result
 
@@ -1940,7 +1999,8 @@ def kaggle_search(req: KaggleSearchRequest) -> Dict[str, Any]:
             ]
         }
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Kaggle search unavailable: {exc}") from exc
+        logger.error("Kaggle search unavailable: error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Kaggle search unavailable.") from exc
 
 
 @router.post("/kaggle/download")
@@ -1975,4 +2035,5 @@ def kaggle_download(req: KaggleDownloadRequest) -> Dict[str, Any]:
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Kaggle download unavailable: {exc}") from exc
+        logger.error("Kaggle download unavailable: error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Kaggle download unavailable.") from exc

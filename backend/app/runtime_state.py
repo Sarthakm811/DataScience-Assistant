@@ -8,6 +8,7 @@ from collections.abc import Iterator, MutableMapping
 from contextvars import ContextVar, Token
 from typing import Any, Dict, List, TypeVar, Generic
 import io
+import logging
 
 import pandas as pd
 import numpy as np
@@ -17,6 +18,9 @@ from PIL import Image
 from app.eda_engine import EDAEngine
 from app.ml_engine import MLEngine
 from app.preprocessing import DataPreprocessor
+from app.utils.config import settings
+
+logger = logging.getLogger(__name__)
 
 K = TypeVar("K")
 V = TypeVar("V")
@@ -83,9 +87,15 @@ def read_uploaded_dataframe(file: UploadFile, content: bytes) -> pd.DataFrame:
     content_type = (file.content_type or "").lower()
 
     if filename.endswith(".csv"):
-        return pd.read_csv(io.BytesIO(content))
+        try:
+            return pd.read_csv(io.BytesIO(content))
+        except (pd.errors.ParserError, UnicodeDecodeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid CSV file") from exc
     if filename.endswith((".xlsx", ".xls")):
-        return pd.read_excel(io.BytesIO(content))
+        try:
+            return pd.read_excel(io.BytesIO(content))
+        except (ValueError, OSError) as exc:
+            raise HTTPException(status_code=400, detail="Invalid spreadsheet file") from exc
     if filename.endswith((".jpg", ".jpeg", ".png")):
         return _image_to_dataframe(file, content)
 
@@ -93,13 +103,13 @@ def read_uploaded_dataframe(file: UploadFile, content: bytes) -> pd.DataFrame:
     if "csv" in content_type or content_type == "text/plain":
         try:
             return pd.read_csv(io.BytesIO(content))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("CSV MIME parser rejected upload: %s", type(exc).__name__)
     if "spreadsheet" in content_type or "excel" in content_type:
         try:
             return pd.read_excel(io.BytesIO(content))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Spreadsheet MIME parser rejected upload: %s", type(exc).__name__)
     if content_type.startswith("image/"):
         return _image_to_dataframe(file, content)
 
@@ -110,15 +120,16 @@ def read_uploaded_dataframe(file: UploadFile, content: bytes) -> pd.DataFrame:
 
     try:
         return pd.read_csv(io.BytesIO(content))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("CSV content parser rejected upload: %s", type(exc).__name__)
 
     try:
         return pd.read_excel(io.BytesIO(content))
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Spreadsheet content parser rejected upload: %s", type(exc).__name__)
 
-    raise HTTPException(status_code=400, detail="Unsupported file format. Use CSV, XLSX, XLS, JPG, JPEG, or PNG.")
+    logger.info("Rejected upload with unsupported format: filename=%r content_type=%r", file.filename, content_type)
+    raise HTTPException(status_code=400, detail="Unsupported or invalid file format")
 
 
 def _image_to_dataframe(file: UploadFile, content: bytes) -> pd.DataFrame:
@@ -127,9 +138,15 @@ def _image_to_dataframe(file: UploadFile, content: bytes) -> pd.DataFrame:
         image = Image.open(io.BytesIO(content))
         image.load()
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid image file: {exc}") from exc
+        logger.error("Image upload parsing failed: error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=400, detail="Invalid image file.") from exc
 
     rgb_img = image.convert("RGB")
+    if rgb_img.width * rgb_img.height > settings.max_image_pixels:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Image exceeds the {settings.max_image_pixels} pixel limit.",
+        )
     arr = np.array(rgb_img, dtype=np.float32)
 
     height, width = arr.shape[0], arr.shape[1]

@@ -24,9 +24,12 @@ class KaggleTool:
             import logging
             logging.getLogger(__name__).info("Kaggle API successfully authenticated.")
             self._authenticated = True
-        except Exception as e:
+        except Exception as exc:
             import logging
-            logging.getLogger(__name__).warning(f"Kaggle authentication failed or missing: {e}. Kaggle features will be unavailable.")
+            logging.getLogger(__name__).warning(
+                "Kaggle authentication failed or missing: error_type=%s",
+                type(exc).__name__,
+            )
             from fastapi import HTTPException
             raise HTTPException(
                 status_code=503, 
@@ -58,8 +61,13 @@ class KaggleTool:
                 "description": metadata.get("description", ""),
                 "columns": metadata.get("columns", []),
             }
-        except Exception as e:
-            return {"id": dataset_id, "error": str(e)}
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error(
+                "Kaggle metadata lookup failed: error_type=%s",
+                type(exc).__name__,
+            )
+            return {"id": dataset_id, "error": "Dataset metadata is unavailable."}
 
     async def get_dataset_summary(self, dataset_id: str) -> str:
         """Get dataset summary for prompt"""

@@ -5,9 +5,12 @@ AI Data Science Research Assistant - FastAPI Backend entrypoint.
 from __future__ import annotations
 
 import os
+import uuid
+import logging
 from typing import Any, Dict, List
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.runtime_compat import router as runtime_router
@@ -16,11 +19,46 @@ from app.api.sessions import router as sessions_router
 from app.api.query import router as query_router
 from app.api.langchain_query import router as langchain_router
 from app.api.datasets import router as datasets_router
+from app.security import bind_tenant_context, require_api_key
 from app.runtime_state import ml_engine
 from mcp.api_routes import router as mcp_router
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 app = FastAPI(title="AI Data Science Assistant API", version="2.2.0")
+logger = logging.getLogger(__name__)
+
+
+@app.middleware("http")
+async def add_request_context(request: Request, call_next):
+    request_id = request.headers.get("X-Request-Id") or uuid.uuid4().hex
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-Id"] = request_id
+    return response
+
+
+@app.exception_handler(Exception)
+async def handle_unexpected_error(request: Request, exc: Exception):
+    request_id = getattr(request.state, "request_id", "unknown")
+    logger.error(
+        "Unhandled request failure: method=%s path=%s request_id=%s error_type=%s",
+        request.method,
+        request.url.path,
+        request_id,
+        type(exc).__name__,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "The server could not complete the request.",
+            "request_id": request_id,
+        },
+        headers={"X-Request-Id": request_id},
+    )
 
 
 def _allowed_origins() -> List[str]:
@@ -46,12 +84,17 @@ app.add_middleware(
 
 # Specialized routers must be registered BEFORE runtime_router to avoid
 # duplicate route shadowing (FastAPI matches first registered route).
-app.include_router(sessions_router, prefix="/api")
-app.include_router(query_router, prefix="/api")
-app.include_router(langchain_router, prefix="/api")
-app.include_router(enhanced_router, prefix="/api")
-app.include_router(datasets_router, prefix="/api")
-app.include_router(mcp_router, prefix="/api")
+protected_dependencies = [
+    Depends(require_api_key),
+    Depends(bind_tenant_context),
+]
+
+app.include_router(sessions_router, prefix="/api", dependencies=protected_dependencies)
+app.include_router(query_router, prefix="/api", dependencies=protected_dependencies)
+app.include_router(langchain_router, prefix="/api", dependencies=protected_dependencies)
+app.include_router(enhanced_router, prefix="/api", dependencies=protected_dependencies)
+app.include_router(datasets_router, prefix="/api", dependencies=protected_dependencies)
+app.include_router(mcp_router, prefix="/api", dependencies=protected_dependencies)
 # runtime_router last — its duplicate stubs for /sessions, /query/enhanced,
 # /query/langchain, /analysis/auto, /datasets/search are now unreachable
 # (intentional — the real implementations above take precedence).

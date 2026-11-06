@@ -19,6 +19,13 @@ MAX_EXECUTION_TIME = int(os.getenv("MAX_EXECUTION_TIME", "45"))
 
 def execute_code(code: str, job_id: str) -> Dict[str, Any]:
     """Execute code in an isolated temporary directory."""
+    if os.getenv("EXECUTION_SANDBOX_CONFIRMED", "").lower() != "true":
+        return {
+            "job_id": job_id,
+            "status": "disabled",
+            "error": "Executor requires an explicitly configured isolated sandbox.",
+        }
+
     with tempfile.TemporaryDirectory() as workdir:
         outputs_dir = os.path.join(workdir, "outputs")
         os.makedirs(outputs_dir, exist_ok=True)

@@ -5,7 +5,9 @@ metadata:
   labels:
     app: ds-agent-backend
 spec:
-  replicas: 3
+  # Runtime datasets and models are process-local. Keep one replica until
+  # shared persistence is configured for those stores.
+  replicas: 1
   selector:
     matchLabels:
       app: ds-agent-backend
@@ -93,8 +95,8 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: ds-agent-backend
-  minReplicas: 2
-  maxReplicas: 10
+  minReplicas: 1
+  maxReplicas: 1
   metrics:
   - type: Resource
     resource:
