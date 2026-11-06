@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "🧪 Running tests for Data Science Research Assistant Agent"
+echo "🧪 Running tests for DataScience Assistant"
 echo ""
 
 # Backend tests

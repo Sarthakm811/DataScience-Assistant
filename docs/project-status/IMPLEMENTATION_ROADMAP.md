@@ -2,7 +2,7 @@
 
 ## Overview
 
-Transforming the Data Science Research Assistant into a production-grade multi-agent system with MCP-style tools, A2A messaging, governance, and observability.
+Transforming DataScience Assistant into a production-grade multi-agent system with MCP-style tools, A2A messaging, governance, and observability.
 
 ## Architecture Components
 

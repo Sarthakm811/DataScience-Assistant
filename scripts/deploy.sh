@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "🚢 Deploying Data Science Research Assistant Agent to Kubernetes"
+echo "🚢 Deploying DataScience Assistant to Kubernetes"
 echo ""
 
 # Check prerequisites

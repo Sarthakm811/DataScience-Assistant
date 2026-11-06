@@ -252,7 +252,7 @@ class ReportGenerator:
         report.append("```")
         report.append("")
         report.append("---")
-        report.append("Prepared by AI Data Science Research Assistant")
+        report.append("Prepared by DataScience Assistant")
 
         report_text = "\n".join(report)
 

@@ -1,5 +1,5 @@
 """
-AI Data Science Research Assistant - FastAPI Backend entrypoint.
+DataScience Assistant - FastAPI Backend entrypoint.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
-app = FastAPI(title="AI Data Science Assistant API", version="2.2.0")
+app = FastAPI(title="DataScience Assistant API", version="2.2.0")
 logger = logging.getLogger(__name__)
 
 
@@ -104,8 +104,8 @@ app.include_router(runtime_router, prefix="/api")
 @app.get("/")
 def root() -> Dict[str, Any]:
     return {
-        "message": "AI Data Science Assistant API is running",
-        "name": "AI Data Science Assistant API",
+        "message": "DataScience Assistant API is running",
+        "name": "DataScience Assistant API",
         "version": "2.2.0",
         "gpu_available": ml_engine.gpu_available,
         "gpu_name": ml_engine.gpu_name,

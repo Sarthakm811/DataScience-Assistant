@@ -3,7 +3,7 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: dsra-backend
+    container_name: datascience-assistant-backend
     ports:
       - "8000:8000"
     environment:
@@ -26,7 +26,7 @@ services:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
         VITE_API_KEY: ${VITE_API_KEY:?VITE_API_KEY must be set}
         VITE_TENANT_ID: ${VITE_TENANT_ID:-prod-tenant-1}
-    container_name: dsra-frontend
+    container_name: datascience-assistant-frontend
     ports:
       - "3000:80"
     depends_on:

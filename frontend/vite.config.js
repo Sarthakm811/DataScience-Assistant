@@ -6,7 +6,7 @@ export default defineConfig(({ mode }) => {
 
     return {
         // Must match the GitHub Pages repo path exactly
-        base: isProd ? '/AI-Data-Science-Research-Assistant/' : '/',
+        base: isProd ? '/DataScience-Assistant/' : '/',
         plugins: [ react() ],
         build: {
             rollupOptions: {

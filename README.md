@@ -1,4 +1,4 @@
-# AI Data Science Research Assistant
+# DataScience Assistant
 
 Production-ready data science assistant with:
 - FastAPI backend for dataset processing, EDA, ML, statistics, and reporting

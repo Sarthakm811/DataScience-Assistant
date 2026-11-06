@@ -3,7 +3,7 @@
 ## 📁 Clean Project Structure
 
 ```
-Data Science Research Assistant Agent/
+DataScience Assistant/
 ├── backend/                    # Backend API & Services
 │   ├── app/                   # FastAPI application
 │   │   ├── api/              # API endpoints

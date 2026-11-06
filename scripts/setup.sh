@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "🚀 Setting up Data Science Research Assistant Agent"
+echo "🚀 Setting up DataScience Assistant"
 echo ""
 
 # Check prerequisites

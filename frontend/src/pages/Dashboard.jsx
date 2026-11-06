@@ -70,7 +70,7 @@ function Dashboard({ dataset }) {
             {/* Hero Section */}
             <div className="card hero-contrast overflow-hidden bg-gradient-to-r from-teal-700 via-blue-800 to-orange-600 text-white">
                 <div className="relative z-10">
-                    <h1 className="title-display mb-2 text-3xl font-bold">Welcome to AI Data Science Assistant</h1>
+                    <h1 className="title-display mb-2 text-3xl font-bold">Welcome to DataScience Assistant</h1>
                     <p className="mb-4 text-cyan-100">Build models, inspect quality, and generate insights faster</p>
                 </div>
 

@@ -37,7 +37,7 @@ function Header({ dataset, setDataset, toggleSidebar, isMobile }) {
                         </button>
                         <div>
                             <h2 className="title-display text-lg font-bold tracking-tight text-slate-900 md:text-2xl">
-                                AI Data Science Research Assistant
+                                DataScience Assistant
                             </h2>
                             <p className="text-xs font-medium text-slate-500 md:text-sm">
                                 {isMobile ? 'Mobile workspace mode' : 'Collaborative analytics workspace'}

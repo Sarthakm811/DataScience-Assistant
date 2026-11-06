@@ -254,7 +254,7 @@ class EDAPDFReport:
         ax.text(
             0.5,
             0.08,
-            "AI Data Science Research Assistant",
+            "DataScience Assistant",
             ha="center",
             va="center",
             fontsize=11,

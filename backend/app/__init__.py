@@ -1,1 +1,1 @@
-# AI Data Science Assistant Backend
+# DataScience Assistant Backend

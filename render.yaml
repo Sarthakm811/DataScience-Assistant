@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: dsra-backend
+    name: datascience-assistant-backend
     runtime: python
     rootDir: backend
     plan: free
@@ -26,14 +26,14 @@ services:
         sync: false
 
   - type: static
-    name: dsra-frontend
+    name: datascience-assistant-frontend
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
     autoDeploy: true
     envVars:
       - key: VITE_API_URL
-        value: "https://dsra-backend.onrender.com"
+        value: "https://datascience-assistant-backend.onrender.com"
       - key: VITE_API_KEY
         sync: false
       - key: VITE_TENANT_ID

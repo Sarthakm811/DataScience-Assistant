@@ -6,7 +6,7 @@ function AIChat({ dataset }) {
     const [ messages, setMessages ] = useState([
         {
             role: 'assistant',
-            content: 'Hello! I\'m your AI Data Science Assistant. Upload a dataset and ask me anything about your data!'
+            content: 'Hello! I\'m DataScience Assistant. Upload a dataset and ask me anything about your data!'
         }
     ])
     const [ input, setInput ] = useState('')
