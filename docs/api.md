@@ -13,16 +13,9 @@ in the current implementation.
 
 ## Authentication
 
-All `/api/*` endpoints require:
-
-```http
-X-API-Key: <configured API key>
-X-Tenant-Id: <tenant identifier>
-```
-
-The API key is configured by the backend `SECRET_KEY` setting. The tenant
-header is required when `ENFORCE_TENANT_ISOLATION=true`, which is the
-production default.
+Protected `/api/*` endpoints require the short-lived HttpOnly `access_token`
+cookie set by `/api/auth/register` or `/api/auth/login`. Tenant identity is
+derived from the authenticated user ID; client tenant headers are ignored.
 
 The following endpoints are public:
 
@@ -31,9 +24,7 @@ GET /
 GET /health
 ```
 
-Do not expose `SECRET_KEY` or backend credentials in frontend source. A
-browser-embedded `VITE_API_KEY` must be treated as a client credential, not a
-secret.
+Do not expose `SECRET_KEY` or backend credentials in frontend source.
 
 ## Common errors
 
@@ -43,8 +34,8 @@ secret.
 }
 ```
 
-- `400`: Invalid request or missing tenant header
-- `401`: Missing or invalid API key
+- `400`: Invalid request
+- `401`: Missing or invalid authentication cookie
 - `404`: Dataset, model, session, or tool not found
 - `413`: Upload or dataset exceeds configured limits
 - `501`: Feature is not configured, such as MCP task execution
@@ -58,8 +49,7 @@ secret.
 ```http
 POST /api/sessions
 Content-Type: application/json
-X-API-Key: <api-key>
-X-Tenant-Id: <tenant-id>
+Cookie: access_token=<jwt>
 ```
 
 Request:

@@ -12,7 +12,6 @@ services:
       KAGGLE_KEY: ${KAGGLE_KEY:-}
       DATABASE_URL: ${DATABASE_URL:-sqlite:///./app.db}
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set}
-      ENFORCE_API_KEY: ${ENFORCE_API_KEY:-true}
       ENFORCE_TENANT_ISOLATION: ${ENFORCE_TENANT_ISOLATION:-true}
       ALLOW_CODE_EXECUTION: ${ALLOW_CODE_EXECUTION:-false}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
@@ -24,8 +23,6 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
-        VITE_API_KEY: ${VITE_API_KEY:?VITE_API_KEY must be set}
-        VITE_TENANT_ID: ${VITE_TENANT_ID:-prod-tenant-1}
     container_name: datascience-assistant-frontend
     ports:
       - "3000:80"

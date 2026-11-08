@@ -7,6 +7,7 @@ from app.db import database
 from app.main import app
 from app.runtime_state import DATASETS, set_current_tenant
 from app.utils.config import settings
+from auth_helpers import cookie_headers
 
 
 @pytest_asyncio.fixture
@@ -18,10 +19,7 @@ async def client():
 
 @pytest.fixture
 def auth_headers():
-    return {
-        "X-API-Key": settings.secret_key,
-        "X-Tenant-Id": "resilience-tenant",
-    }
+    return cookie_headers("resilience")
 
 
 @pytest.mark.asyncio

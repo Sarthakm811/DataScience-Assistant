@@ -506,7 +506,7 @@ class EnhancedVisualizer:
 
         # Z-score method
         stats.zscore(data)
-        pass # z_outliers unused
+        pass  # z_outliers unused
 
         # Create figure
         fig = go.Figure()

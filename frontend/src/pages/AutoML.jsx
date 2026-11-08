@@ -374,14 +374,8 @@ function AutoML({ dataset, setDataset }) {
             const backendDatasetId = await ensureDatasetOnBackend()
 
             const apiUrl = import.meta.env.VITE_API_URL || ''
-            const API_KEY = import.meta.env.VITE_API_KEY || ''
-            const tenantId = import.meta.env.VITE_TENANT_ID
-                || window.localStorage.getItem('tenant_id')
-                || 'public'
             const authHeaders = {
                 'Content-Type': 'application/json',
-                'X-API-Key': API_KEY,
-                'X-Tenant-Id': tenantId,
             }
 
             let response
@@ -389,6 +383,7 @@ function AutoML({ dataset, setDataset }) {
                 response = await fetch(`${apiUrl}/api/ml/cluster`, {
                     method: 'POST',
                     headers: authHeaders,
+                    credentials: 'include',
                     body: JSON.stringify({
                         dataset_id: backendDatasetId,
                         x_columns: config.xColumns,
@@ -402,6 +397,7 @@ function AutoML({ dataset, setDataset }) {
                 response = await fetch(`${apiUrl}/api/ml/train`, {
                     method: 'POST',
                     headers: authHeaders,
+                    credentials: 'include',
                     body: JSON.stringify({
                         datasetId: backendDatasetId,
                         targetColumn: config.yColumns[ 0 ],
@@ -417,6 +413,7 @@ function AutoML({ dataset, setDataset }) {
                 response = await fetch(`${apiUrl}/api/ml/train-selected`, {
                     method: 'POST',
                     headers: authHeaders,
+                    credentials: 'include',
                     body: JSON.stringify({
                         dataset_id: backendDatasetId,
                         model_name: config.modelName,

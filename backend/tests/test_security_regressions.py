@@ -6,6 +6,7 @@ from app.main import app
 from app.runtime_state import set_current_tenant
 from app.services.session_store import SessionStore
 from app.utils.config import settings
+from auth_helpers import cookie_headers
 
 
 @pytest_asyncio.fixture
@@ -17,10 +18,7 @@ async def client():
 
 @pytest.fixture
 def auth_headers():
-    return {
-        "X-API-Key": settings.secret_key,
-        "X-Tenant-Id": "regression-tenant",
-    }
+    return cookie_headers("regression")
 
 
 @pytest.mark.asyncio
@@ -33,6 +31,40 @@ async def test_specialized_routes_require_authentication(client):
 async def test_health_remains_public(client):
     response = await client.get("/health")
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_register_sets_http_only_auth_cookie(client):
+    response = await client.post(
+        "/api/auth/register",
+        json={"username": "new-user-123", "password": "test-password-123"},
+    )
+    assert response.status_code == 200
+    assert "access_token=" in response.headers["set-cookie"]
+    assert "HttpOnly" in response.headers["set-cookie"]
+
+
+@pytest.mark.asyncio
+async def test_tampered_token_is_rejected(client):
+    response = await client.get(
+        "/api/datasets", headers={"Cookie": "access_token=not-a-valid-token"}
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_authenticated_users_cannot_access_each_others_data(client, auth_headers):
+    first = await client.post(
+        "/api/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("owned.csv", b"value\n1\n", "text/csv")},
+    )
+    assert first.status_code == 200
+    dataset_id = first.json()["id"]
+
+    other_headers = cookie_headers("other-user")
+    response = await client.get(f"/api/datasets/{dataset_id}", headers=other_headers)
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -65,6 +97,16 @@ async def test_query_rejects_empty_payload(client, auth_headers):
         json={"session_id": "", "query": ""},
     )
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tenant_id", ["bad tenant", "bad/tenant", "x" * 65])
+async def test_client_tenant_header_cannot_override_authenticated_tenant(
+    client, auth_headers, tenant_id
+):
+    headers = {**auth_headers, "X-Tenant-Id": tenant_id}
+    response = await client.get("/api/datasets", headers=headers)
+    assert response.status_code == 200
 
 
 @pytest.mark.asyncio

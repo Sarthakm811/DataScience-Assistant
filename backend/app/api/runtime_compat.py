@@ -14,6 +14,7 @@ import re
 import time
 import uuid
 import logging
+import threading
 from contextlib import contextmanager
 from typing import Any, Dict, List, Optional
 
@@ -25,13 +26,18 @@ import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import train_test_split, StratifiedKFold, KFold, cross_val_score
+from sklearn.model_selection import (
+    train_test_split,
+    StratifiedKFold,
+    KFold,
+    cross_val_score,
+)
 from sklearn.multioutput import MultiOutputClassifier, MultiOutputRegressor
 from sklearn.base import clone
 from sklearn.metrics import confusion_matrix, roc_auc_score, roc_curve
 
 from app.explainability import ModelExplainer
-from app.security import bind_tenant_context, require_api_key
+from app.security import bind_tenant_context
 from app.utils.config import settings
 from app.utils.reliability import validate_dataframe
 from app.runtime_state import (
@@ -45,20 +51,33 @@ from app.runtime_state import (
     read_uploaded_dataframe,
 )
 from app.preprocessing import DataPreprocessor
+from app.services.training import train_model
 
-router = APIRouter(tags=["runtime"], dependencies=[Depends(require_api_key), Depends(bind_tenant_context)])
+router = APIRouter(
+    tags=["runtime"],
+    dependencies=[Depends(bind_tenant_context)],
+)
 logger = logging.getLogger(__name__)
 
 # In-memory report history store: session_id -> list of report metadata
-REPORT_HISTORY: TenantScopedDict[str, List[Dict[str, Any]]] = TenantScopedDict()
+REPORT_HISTORY: TenantScopedDict[str, List[Dict[str, Any]]] = TenantScopedDict(
+    "report history"
+)
+_KAGGLE_CREDENTIALS_LOCK = threading.RLock()
 
 
 class TrainRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    dataset_id: str = Field(min_length=1, max_length=255, pattern=r"\S", alias="datasetId")
-    target_column: str = Field(min_length=1, max_length=255, pattern=r"\S", alias="targetColumn")
-    task_type: str = Field(default="auto", min_length=1, max_length=32, pattern=r"\S", alias="taskType")
+    dataset_id: str = Field(
+        min_length=1, max_length=255, pattern=r"\S", alias="datasetId"
+    )
+    target_column: str = Field(
+        min_length=1, max_length=255, pattern=r"\S", alias="targetColumn"
+    )
+    task_type: str = Field(
+        default="auto", min_length=1, max_length=32, pattern=r"\S", alias="taskType"
+    )
     use_gpu: bool = Field(default=True, alias="useGpu")
     hyperparameter_tuning: bool = Field(default=False, alias="hyperparameterTuning")
     n_trials: int = Field(default=50, ge=1, le=500, alias="nTrials")
@@ -74,6 +93,7 @@ class SelectedModelTrainRequest(BaseModel):
     task_type: str = Field(default="auto", min_length=1, max_length=32)
     test_size: float = Field(default=0.2, gt=0.0, lt=1.0)
     random_state: int = 42
+    cv_folds: int = Field(default=5, ge=0, le=20)
 
 
 class PreprocessRequest(BaseModel):
@@ -198,9 +218,15 @@ class StatisticsMathRequest(BaseModel):
     variant_label: Optional[str] = None
     prior_alpha: float = Field(default=1.0, gt=0.0, le=1_000_000.0)
     prior_beta: float = Field(default=1.0, gt=0.0, le=1_000_000.0)
-    arima_order: List[int] = Field(default_factory=lambda: [1, 1, 1], min_length=3, max_length=3)
-    sarima_order: List[int] = Field(default_factory=lambda: [1, 1, 1], min_length=3, max_length=3)
-    seasonal_order: List[int] = Field(default_factory=lambda: [1, 1, 1], min_length=3, max_length=3)
+    arima_order: List[int] = Field(
+        default_factory=lambda: [1, 1, 1], min_length=3, max_length=3
+    )
+    sarima_order: List[int] = Field(
+        default_factory=lambda: [1, 1, 1], min_length=3, max_length=3
+    )
+    seasonal_order: List[int] = Field(
+        default_factory=lambda: [1, 1, 1], min_length=3, max_length=3
+    )
     seasonal_period: int = Field(default=12, ge=2, le=365)
     forecast_steps: int = Field(default=12, ge=1, le=365)
     matrix_columns: Optional[List[str]] = None
@@ -208,33 +234,61 @@ class StatisticsMathRequest(BaseModel):
 
 
 DEFAULT_STOPWORDS = {
-    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "he", "in", "is",
-    "it", "its", "of", "on", "that", "the", "to", "was", "were", "will", "with", "or", "not",
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "has",
+    "he",
+    "in",
+    "is",
+    "it",
+    "its",
+    "of",
+    "on",
+    "that",
+    "the",
+    "to",
+    "was",
+    "were",
+    "will",
+    "with",
+    "or",
+    "not",
 }
 
 
 @contextmanager
 def _temporary_kaggle_credentials(username: Optional[str], key: Optional[str]):
-    original_username = os.environ.get("KAGGLE_USERNAME")
-    original_key = os.environ.get("KAGGLE_KEY")
-    try:
-        if username and key:
-            os.environ["KAGGLE_USERNAME"] = username
-            os.environ["KAGGLE_KEY"] = key
-        yield
-    finally:
-        if original_username is None:
-            os.environ.pop("KAGGLE_USERNAME", None)
-        else:
-            os.environ["KAGGLE_USERNAME"] = original_username
+    with _KAGGLE_CREDENTIALS_LOCK:
+        original_username = os.environ.get("KAGGLE_USERNAME")
+        original_key = os.environ.get("KAGGLE_KEY")
+        try:
+            if username and key:
+                os.environ["KAGGLE_USERNAME"] = username
+                os.environ["KAGGLE_KEY"] = key
+            yield
+        finally:
+            if original_username is None:
+                os.environ.pop("KAGGLE_USERNAME", None)
+            else:
+                os.environ["KAGGLE_USERNAME"] = original_username
 
-        if original_key is None:
-            os.environ.pop("KAGGLE_KEY", None)
-        else:
-            os.environ["KAGGLE_KEY"] = original_key
+            if original_key is None:
+                os.environ.pop("KAGGLE_KEY", None)
+            else:
+                os.environ["KAGGLE_KEY"] = original_key
 
 
-def _infer_task_type(df: pd.DataFrame, y_columns: List[str], preferred: str = "auto") -> str:
+def _infer_task_type(
+    df: pd.DataFrame, y_columns: List[str], preferred: str = "auto"
+) -> str:
     if preferred in {"classification", "regression", "multi_output"}:
         return preferred
 
@@ -255,7 +309,9 @@ def _encode_features(df_x: pd.DataFrame) -> pd.DataFrame:
     return x.fillna(0)
 
 
-def _encode_targets_for_classification(df_y: pd.DataFrame) -> tuple[pd.DataFrame, Dict[str, List[Any]]]:
+def _encode_targets_for_classification(
+    df_y: pd.DataFrame,
+) -> tuple[pd.DataFrame, Dict[str, List[Any]]]:
     encoded = pd.DataFrame(index=df_y.index)
     labels: Dict[str, List[Any]] = {}
     for col in df_y.columns:
@@ -268,21 +324,44 @@ def _encode_targets_for_classification(df_y: pd.DataFrame) -> tuple[pd.DataFrame
 
 def _resolve_model(model_name: str, task_type: str):
     from sklearn.base import clone
-    from sklearn.discriminant_analysis import LinearDiscriminantAnalysis, QuadraticDiscriminantAnalysis
-    from sklearn.ensemble import (
-        AdaBoostClassifier, AdaBoostRegressor,
-        BaggingClassifier, BaggingRegressor,
-        ExtraTreesClassifier, ExtraTreesRegressor,
-        GradientBoostingClassifier, GradientBoostingRegressor,
-        RandomForestClassifier, RandomForestRegressor,
+    from sklearn.discriminant_analysis import (
+        LinearDiscriminantAnalysis,
+        QuadraticDiscriminantAnalysis,
     )
-    from sklearn.gaussian_process import GaussianProcessClassifier, GaussianProcessRegressor
+    from sklearn.ensemble import (
+        AdaBoostClassifier,
+        AdaBoostRegressor,
+        BaggingClassifier,
+        BaggingRegressor,
+        ExtraTreesClassifier,
+        ExtraTreesRegressor,
+        GradientBoostingClassifier,
+        GradientBoostingRegressor,
+        RandomForestClassifier,
+        RandomForestRegressor,
+    )
+    from sklearn.gaussian_process import (
+        GaussianProcessClassifier,
+        GaussianProcessRegressor,
+    )
     from sklearn.kernel_ridge import KernelRidge
     from sklearn.linear_model import (
-        BayesianRidge, ElasticNet, HuberRegressor, Lars, Lasso, LassoLars,
-        LinearRegression, LogisticRegression, OrthogonalMatchingPursuit,
-        PassiveAggressiveClassifier, PassiveAggressiveRegressor,
-        RANSACRegressor, Ridge, RidgeClassifier, SGDClassifier, SGDRegressor,
+        BayesianRidge,
+        ElasticNet,
+        HuberRegressor,
+        Lars,
+        Lasso,
+        LassoLars,
+        LinearRegression,
+        LogisticRegression,
+        OrthogonalMatchingPursuit,
+        PassiveAggressiveClassifier,
+        PassiveAggressiveRegressor,
+        RANSACRegressor,
+        Ridge,
+        RidgeClassifier,
+        SGDClassifier,
+        SGDRegressor,
         TheilSenRegressor,
     )
     from sklearn.multioutput import MultiOutputClassifier, MultiOutputRegressor
@@ -290,7 +369,12 @@ def _resolve_model(model_name: str, task_type: str):
     from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
     from sklearn.neural_network import MLPClassifier, MLPRegressor
     from sklearn.svm import SVC, SVR, LinearSVC, LinearSVR
-    from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor, ExtraTreeClassifier, ExtraTreeRegressor
+    from sklearn.tree import (
+        DecisionTreeClassifier,
+        DecisionTreeRegressor,
+        ExtraTreeClassifier,
+        ExtraTreeRegressor,
+    )
 
     name = model_name.strip().lower()
 
@@ -302,7 +386,9 @@ def _resolve_model(model_name: str, task_type: str):
         "elastic net": ElasticNet(alpha=0.1, max_iter=2000),
         "bayesian ridge": BayesianRidge(),
         "sgd regressor": SGDRegressor(max_iter=1000, random_state=42),
-        "passive aggressive regressor": PassiveAggressiveRegressor(max_iter=1000, random_state=42),
+        "passive aggressive regressor": PassiveAggressiveRegressor(
+            max_iter=1000, random_state=42
+        ),
         "lars": Lars(random_state=42),
         "lars lasso": LassoLars(random_state=42),
         "orthogonal matching pursuit": OrthogonalMatchingPursuit(),
@@ -316,7 +402,9 @@ def _resolve_model(model_name: str, task_type: str):
         # Ensemble
         "random forest": RandomForestRegressor(n_estimators=200, random_state=42),
         "extra trees": ExtraTreesRegressor(n_estimators=200, random_state=42),
-        "gradient boosting": GradientBoostingRegressor(n_estimators=200, random_state=42),
+        "gradient boosting": GradientBoostingRegressor(
+            n_estimators=200, random_state=42
+        ),
         "adaboost": AdaBoostRegressor(n_estimators=100, random_state=42),
         "bagging": BaggingRegressor(n_estimators=100, random_state=42),
         # Distance
@@ -327,7 +415,9 @@ def _resolve_model(model_name: str, task_type: str):
         # Kernel
         "kernel ridge": KernelRidge(),
         # Neural
-        "mlp": MLPRegressor(hidden_layer_sizes=(100, 50), max_iter=500, random_state=42),
+        "mlp": MLPRegressor(
+            hidden_layer_sizes=(100, 50), max_iter=500, random_state=42
+        ),
         # Gaussian
         "gaussian process": GaussianProcessRegressor(random_state=42),
     }
@@ -337,14 +427,18 @@ def _resolve_model(model_name: str, task_type: str):
         "logistic regression": LogisticRegression(max_iter=2000),
         "ridge classifier": RidgeClassifier(),
         "sgd classifier": SGDClassifier(max_iter=1000, random_state=42),
-        "passive aggressive classifier": PassiveAggressiveClassifier(max_iter=1000, random_state=42),
+        "passive aggressive classifier": PassiveAggressiveClassifier(
+            max_iter=1000, random_state=42
+        ),
         # Tree
         "decision tree": DecisionTreeClassifier(random_state=42),
         "extra tree": ExtraTreeClassifier(random_state=42),
         # Ensemble
         "random forest": RandomForestClassifier(n_estimators=200, random_state=42),
         "extra trees": ExtraTreesClassifier(n_estimators=200, random_state=42),
-        "gradient boosting": GradientBoostingClassifier(n_estimators=200, random_state=42),
+        "gradient boosting": GradientBoostingClassifier(
+            n_estimators=200, random_state=42
+        ),
         "adaboost": AdaBoostClassifier(n_estimators=100, random_state=42),
         "bagging": BaggingClassifier(n_estimators=100, random_state=42),
         # Distance
@@ -359,7 +453,9 @@ def _resolve_model(model_name: str, task_type: str):
         "lda": LinearDiscriminantAnalysis(),
         "qda": QuadraticDiscriminantAnalysis(),
         # Neural
-        "mlp": MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=500, random_state=42),
+        "mlp": MLPClassifier(
+            hidden_layer_sizes=(100, 50), max_iter=500, random_state=42
+        ),
         # Gaussian
         "gaussian process": GaussianProcessClassifier(random_state=42),
     }
@@ -367,13 +463,24 @@ def _resolve_model(model_name: str, task_type: str):
     # Optional heavy deps
     try:
         from xgboost import XGBClassifier, XGBRegressor  # type: ignore
+
         regression_models["xgboost"] = XGBRegressor(
-            n_estimators=200, learning_rate=0.05, max_depth=6,
-            subsample=0.8, colsample_bytree=0.8, random_state=42, n_jobs=2,
+            n_estimators=200,
+            learning_rate=0.05,
+            max_depth=6,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42,
+            n_jobs=2,
         )
         classification_models["xgboost"] = XGBClassifier(
-            n_estimators=200, learning_rate=0.05, max_depth=6,
-            subsample=0.8, colsample_bytree=0.8, random_state=42, n_jobs=2,
+            n_estimators=200,
+            learning_rate=0.05,
+            max_depth=6,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42,
+            n_jobs=2,
             eval_metric="logloss",
         )
     except Exception:
@@ -381,26 +488,42 @@ def _resolve_model(model_name: str, task_type: str):
 
     try:
         from lightgbm import LGBMClassifier, LGBMRegressor  # type: ignore
-        regression_models["lightgbm"] = LGBMRegressor(n_estimators=200, random_state=42, verbose=-1)
-        classification_models["lightgbm"] = LGBMClassifier(n_estimators=200, random_state=42, verbose=-1)
+
+        regression_models["lightgbm"] = LGBMRegressor(
+            n_estimators=200, random_state=42, verbose=-1
+        )
+        classification_models["lightgbm"] = LGBMClassifier(
+            n_estimators=200, random_state=42, verbose=-1
+        )
     except Exception:
         pass
 
     try:
         from catboost import CatBoostClassifier, CatBoostRegressor  # type: ignore
-        regression_models["catboost"] = CatBoostRegressor(iterations=200, random_state=42, verbose=False)
-        classification_models["catboost"] = CatBoostClassifier(iterations=200, random_state=42, verbose=False)
+
+        regression_models["catboost"] = CatBoostRegressor(
+            iterations=200, random_state=42, verbose=False
+        )
+        classification_models["catboost"] = CatBoostClassifier(
+            iterations=200, random_state=42, verbose=False
+        )
     except Exception:
         pass
 
     if task_type == "regression":
         if name not in regression_models:
-            raise HTTPException(status_code=400, detail=f"Model '{model_name}' is not available for regression. Available: {sorted(regression_models.keys())}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model '{model_name}' is not available for regression. Available: {sorted(regression_models.keys())}",
+            )
         return regression_models[name]
 
     if task_type == "classification":
         if name not in classification_models:
-            raise HTTPException(status_code=400, detail=f"Model '{model_name}' is not available for classification. Available: {sorted(classification_models.keys())}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model '{model_name}' is not available for classification. Available: {sorted(classification_models.keys())}",
+            )
         return classification_models[name]
 
     # multi_output
@@ -409,7 +532,10 @@ def _resolve_model(model_name: str, task_type: str):
     if name in classification_models:
         return MultiOutputClassifier(clone(classification_models[name]))
 
-    raise HTTPException(status_code=400, detail=f"Model '{model_name}' is not available for multi-output")
+    raise HTTPException(
+        status_code=400,
+        detail=f"Model '{model_name}' is not available for multi-output",
+    )
 
 
 def _is_missing(value: Any) -> bool:
@@ -461,25 +587,38 @@ def _parse_numeric_value(value: Any, thousands_sep: str, decimal_sep: str) -> An
         return value
 
 
-def _apply_type_fixer(cleaned: pd.DataFrame, req: DataCleaningRequest) -> Dict[str, Any]:
+def _apply_type_fixer(
+    cleaned: pd.DataFrame, req: DataCleaningRequest
+) -> Dict[str, Any]:
     if not req.type_fixer_enabled:
         return {"enabled": False}
 
     all_cols = cleaned.columns.tolist()
-    object_like = cleaned.select_dtypes(include=["object", "string", "category"]).columns.tolist()
+    object_like = cleaned.select_dtypes(
+        include=["object", "string", "category"]
+    ).columns.tolist()
 
-    number_cols = _select_columns(req.number_columns, object_like if req.number_columns is None else all_cols)
+    number_cols = _select_columns(
+        req.number_columns, object_like if req.number_columns is None else all_cols
+    )
 
     auto_date_cols = [
-        col for col in object_like
+        col
+        for col in object_like
         if any(token in str(col).lower() for token in ["date", "time", "timestamp"])
     ]
-    date_cols = _select_columns(req.date_columns, auto_date_cols if req.date_columns is None else all_cols)
-    string_cols = _select_columns(req.string_columns, object_like if req.string_columns is None else all_cols)
+    date_cols = _select_columns(
+        req.date_columns, auto_date_cols if req.date_columns is None else all_cols
+    )
+    string_cols = _select_columns(
+        req.string_columns, object_like if req.string_columns is None else all_cols
+    )
 
     for col in number_cols:
         cleaned[col] = cleaned[col].apply(
-            lambda v: _parse_numeric_value(v, req.number_thousands_separator, req.number_decimal_separator)
+            lambda v: _parse_numeric_value(
+                v, req.number_thousands_separator, req.number_decimal_separator
+            )
         )
 
     for col in date_cols:
@@ -488,14 +627,18 @@ def _apply_type_fixer(cleaned: pd.DataFrame, req: DataCleaningRequest) -> Dict[s
         best_count = -1
 
         for fmt in [f.strip() for f in req.date_formats if str(f).strip()]:
-            candidate = pd.to_datetime(source, format=fmt, errors="coerce", dayfirst=req.date_day_first)
+            candidate = pd.to_datetime(
+                source, format=fmt, errors="coerce", dayfirst=req.date_day_first
+            )
             count = int(candidate.notna().sum())
             if count > best_count:
                 parsed = candidate
                 best_count = count
 
         if parsed is None or best_count <= 0:
-            parsed = pd.to_datetime(source, errors="coerce", dayfirst=req.date_day_first)
+            parsed = pd.to_datetime(
+                source, errors="coerce", dayfirst=req.date_day_first
+            )
 
         cleaned[col] = parsed.dt.strftime("%Y-%m-%d").where(parsed.notna(), source)
 
@@ -510,17 +653,28 @@ def _apply_type_fixer(cleaned: pd.DataFrame, req: DataCleaningRequest) -> Dict[s
     }
 
 
-def _apply_text_cleaner(cleaned: pd.DataFrame, req: DataCleaningRequest) -> Dict[str, Any]:
+def _apply_text_cleaner(
+    cleaned: pd.DataFrame, req: DataCleaningRequest
+) -> Dict[str, Any]:
     if not req.text_cleaner_enabled:
         return {"enabled": False}
 
-    text_cols = cleaned.select_dtypes(include=["object", "string", "category"]).columns.tolist()
+    text_cols = cleaned.select_dtypes(
+        include=["object", "string", "category"]
+    ).columns.tolist()
     selected_cols = _select_columns(req.text_clean_columns, text_cols)
 
     stopwords = set(DEFAULT_STOPWORDS)
-    stopwords.update({str(word).strip().lower() for word in req.custom_stopwords if str(word).strip()})
+    stopwords.update(
+        {
+            str(word).strip().lower()
+            for word in req.custom_stopwords
+            if str(word).strip()
+        }
+    )
 
     for col in selected_cols:
+
         def _clean_text(v: Any) -> Any:
             if _is_missing(v):
                 return v
@@ -530,7 +684,9 @@ def _apply_text_cleaner(cleaned: pd.DataFrame, req: DataCleaningRequest) -> Dict
             if req.text_remove_punctuation:
                 text = re.sub(r"[^\w\s]", " ", text)
             if req.text_remove_stopwords:
-                tokens = [tok for tok in text.split() if tok and tok.lower() not in stopwords]
+                tokens = [
+                    tok for tok in text.split() if tok and tok.lower() not in stopwords
+                ]
                 text = " ".join(tokens)
             return re.sub(r"\s+", " ", text).strip()
 
@@ -542,11 +698,15 @@ def _apply_text_cleaner(cleaned: pd.DataFrame, req: DataCleaningRequest) -> Dict
     }
 
 
-def _apply_category_standardization(cleaned: pd.DataFrame, req: DataCleaningRequest) -> Dict[str, Any]:
+def _apply_category_standardization(
+    cleaned: pd.DataFrame, req: DataCleaningRequest
+) -> Dict[str, Any]:
     if not req.category_standardize_enabled:
         return {"enabled": False}
 
-    category_cols = cleaned.select_dtypes(include=["object", "string", "category"]).columns.tolist()
+    category_cols = cleaned.select_dtypes(
+        include=["object", "string", "category"]
+    ).columns.tolist()
     selected_cols = _select_columns(req.category_columns, category_cols)
 
     normalized_mappings: Dict[str, Dict[str, str]] = {}
@@ -585,7 +745,9 @@ def _apply_category_standardization(cleaned: pd.DataFrame, req: DataCleaningRequ
     }
 
 
-def _apply_noise_smoothing(cleaned: pd.DataFrame, req: DataCleaningRequest) -> Dict[str, Any]:
+def _apply_noise_smoothing(
+    cleaned: pd.DataFrame, req: DataCleaningRequest
+) -> Dict[str, Any]:
     if not req.noise_smoothing_enabled:
         return {"enabled": False}
 
@@ -613,16 +775,22 @@ def _apply_noise_smoothing(cleaned: pd.DataFrame, req: DataCleaningRequest) -> D
     }
 
 
-def _clean_dataframe(df: pd.DataFrame, req: DataCleaningRequest) -> tuple[pd.DataFrame, Dict[str, Any]]:
+def _clean_dataframe(
+    df: pd.DataFrame, req: DataCleaningRequest
+) -> tuple[pd.DataFrame, Dict[str, Any]]:
     cleaned = df.copy()
 
     before_rows = int(len(cleaned))
     before_missing = int(cleaned.apply(lambda col: col.apply(_is_missing)).sum().sum())
 
     if req.trim_text:
-        obj_cols = cleaned.select_dtypes(include=["object", "string", "category"]).columns
+        obj_cols = cleaned.select_dtypes(
+            include=["object", "string", "category"]
+        ).columns
         for col in obj_cols:
-            cleaned[col] = cleaned[col].apply(lambda v: v.strip() if isinstance(v, str) else v)
+            cleaned[col] = cleaned[col].apply(
+                lambda v: v.strip() if isinstance(v, str) else v
+            )
 
     type_fixer_summary = _apply_type_fixer(cleaned, req)
     text_clean_summary = _apply_text_cleaner(cleaned, req)
@@ -635,7 +803,9 @@ def _clean_dataframe(df: pd.DataFrame, req: DataCleaningRequest) -> tuple[pd.Dat
         for col in cleaned.columns:
             fill_value = _choose_fill_value(cleaned[col], req.missing_strategy)
             # Use default arg to capture fill_value by value, not by reference (B023)
-            cleaned[col] = cleaned[col].apply(lambda v, fv=fill_value: fv if _is_missing(v) else v)
+            cleaned[col] = cleaned[col].apply(
+                lambda v, fv=fill_value: fv if _is_missing(v) else v
+            )
 
     if req.remove_duplicates:
         cleaned = cleaned.drop_duplicates().copy()
@@ -658,7 +828,9 @@ def _clean_dataframe(df: pd.DataFrame, req: DataCleaningRequest) -> tuple[pd.Dat
             if req.outlier_action == "remove":
                 keep_mask = pd.Series(True, index=cleaned.index)
                 for col, (low, high) in bounds.items():
-                    keep_mask &= cleaned[col].isna() | ((cleaned[col] >= low) & (cleaned[col] <= high))
+                    keep_mask &= cleaned[col].isna() | (
+                        (cleaned[col] >= low) & (cleaned[col] <= high)
+                    )
                 cleaned = cleaned.loc[keep_mask].copy()
             else:
                 for col, (low, high) in bounds.items():
@@ -685,9 +857,15 @@ def _clean_dataframe(df: pd.DataFrame, req: DataCleaningRequest) -> tuple[pd.Dat
     return cleaned, summary
 
 
-def _safe_feature_importance(model: Any, feature_names: List[str]) -> List[Dict[str, Any]]:
+def _safe_feature_importance(
+    model: Any, feature_names: List[str]
+) -> List[Dict[str, Any]]:
     estimator = model
-    if hasattr(model, "estimators_") and isinstance(model.estimators_, list) and model.estimators_:
+    if (
+        hasattr(model, "estimators_")
+        and isinstance(model.estimators_, list)
+        and model.estimators_
+    ):
         estimator = model.estimators_[0]
 
     if hasattr(estimator, "feature_importances_"):
@@ -714,16 +892,22 @@ def _safe_feature_importance(model: Any, feature_names: List[str]) -> List[Dict[
 
 def _evaluate_classification(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, Any]:
     from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+
     return {
         "accuracy": float(accuracy_score(y_true, y_pred)),
-        "precision": float(precision_score(y_true, y_pred, average="weighted", zero_division=0)),
-        "recall": float(recall_score(y_true, y_pred, average="weighted", zero_division=0)),
+        "precision": float(
+            precision_score(y_true, y_pred, average="weighted", zero_division=0)
+        ),
+        "recall": float(
+            recall_score(y_true, y_pred, average="weighted", zero_division=0)
+        ),
         "f1": float(f1_score(y_true, y_pred, average="weighted", zero_division=0)),
     }
 
 
 def _evaluate_regression(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, Any]:
     from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+
     mse = float(mean_squared_error(y_true, y_pred))
     return {
         "r2": float(r2_score(y_true, y_pred)),
@@ -733,7 +917,9 @@ def _evaluate_regression(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, An
     }
 
 
-def _resolve_numeric_column(df: pd.DataFrame, preferred: Optional[str]) -> Optional[str]:
+def _resolve_numeric_column(
+    df: pd.DataFrame, preferred: Optional[str]
+) -> Optional[str]:
     if preferred and preferred in df.columns:
         return preferred
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
@@ -760,7 +946,14 @@ def _encode_binary_outcome(series: pd.Series) -> Optional[pd.Series]:
 
 @router.post("/statistics-math/analyze")
 def statistics_math_analysis(request: StatisticsMathRequest) -> Dict[str, Any]:
-    from scipy.stats import beta as beta_distribution, chi2_contingency, f_oneway, norm, t, ttest_ind
+    from scipy.stats import (
+        beta as beta_distribution,
+        chi2_contingency,
+        f_oneway,
+        norm,
+        t,
+        ttest_ind,
+    )
     from statsmodels.stats.proportion import proportions_ztest
     from statsmodels.tsa.arima.model import ARIMA
     from statsmodels.tsa.statespace.sarimax import SARIMAX
@@ -773,7 +966,9 @@ def statistics_math_analysis(request: StatisticsMathRequest) -> Dict[str, Any]:
 
     numeric_column = _resolve_numeric_column(df, request.numeric_column)
     if request.numeric_column and request.numeric_column not in df.columns:
-        warnings.append(f"Requested numeric column '{request.numeric_column}' was not found. Using fallback.")
+        warnings.append(
+            f"Requested numeric column '{request.numeric_column}' was not found. Using fallback."
+        )
 
     probability: Dict[str, Any] = {}
     confidence_intervals: Dict[str, Any] = {}
@@ -793,25 +988,43 @@ def statistics_math_analysis(request: StatisticsMathRequest) -> Dict[str, Any]:
                 "mean": mean_val,
                 "std": std_val,
                 "sample_size": int(len(numeric_series)),
-                "within_1_std": float(norm.cdf(1) - norm.cdf(-1)) if std_val > 0 else None,
-                "within_2_std": float(norm.cdf(2) - norm.cdf(-2)) if std_val > 0 else None,
-                "within_3_std": float(norm.cdf(3) - norm.cdf(-3)) if std_val > 0 else None,
+                "within_1_std": (
+                    float(norm.cdf(1) - norm.cdf(-1)) if std_val > 0 else None
+                ),
+                "within_2_std": (
+                    float(norm.cdf(2) - norm.cdf(-2)) if std_val > 0 else None
+                ),
+                "within_3_std": (
+                    float(norm.cdf(3) - norm.cdf(-3)) if std_val > 0 else None
+                ),
             }
 
             if request.probability_value is not None and std_val > 0:
                 z_score = float((request.probability_value - mean_val) / std_val)
-                probability.update({
-                    "input_value": float(request.probability_value),
-                    "z_score": z_score,
-                    "p_below_value_normal": float(norm.cdf(z_score)),
-                    "p_above_value_normal": float(1.0 - norm.cdf(z_score)),
-                    "empirical_p_below_value": float((numeric_series <= request.probability_value).mean()),
-                })
+                probability.update(
+                    {
+                        "input_value": float(request.probability_value),
+                        "z_score": z_score,
+                        "p_below_value_normal": float(norm.cdf(z_score)),
+                        "p_above_value_normal": float(1.0 - norm.cdf(z_score)),
+                        "empirical_p_below_value": float(
+                            (numeric_series <= request.probability_value).mean()
+                        ),
+                    }
+                )
 
             confidence = float(np.clip(request.confidence_level, 0.5, 0.999))
             alpha = 1.0 - confidence
-            stderr = float(std_val / np.sqrt(len(numeric_series))) if len(numeric_series) > 1 else 0.0
-            margin = float(t.ppf(1 - alpha / 2, df=len(numeric_series) - 1) * stderr) if len(numeric_series) > 1 else 0.0
+            stderr = (
+                float(std_val / np.sqrt(len(numeric_series)))
+                if len(numeric_series) > 1
+                else 0.0
+            )
+            margin = (
+                float(t.ppf(1 - alpha / 2, df=len(numeric_series) - 1) * stderr)
+                if len(numeric_series) > 1
+                else 0.0
+            )
             confidence_intervals = {
                 "column": numeric_column,
                 "confidence_level": confidence,
@@ -822,22 +1035,38 @@ def statistics_math_analysis(request: StatisticsMathRequest) -> Dict[str, Any]:
                 "n": int(len(numeric_series)),
             }
         else:
-            warnings.append("Not enough numeric rows to compute probability and confidence interval outputs.")
+            warnings.append(
+                "Not enough numeric rows to compute probability and confidence interval outputs."
+            )
     else:
-        warnings.append("No numeric column available for probability, confidence interval, and time-series baselines.")
+        warnings.append(
+            "No numeric column available for probability, confidence interval, and time-series baselines."
+        )
 
     group_column = request.group_column if request.group_column in df.columns else None
-    categorical_column = request.categorical_column if request.categorical_column in df.columns else None
+    categorical_column = (
+        request.categorical_column if request.categorical_column in df.columns else None
+    )
 
     if group_column and numeric_column:
         grouped = df[[group_column, numeric_column]].dropna().copy()
-        grouped[numeric_column] = pd.to_numeric(grouped[numeric_column], errors="coerce")
+        grouped[numeric_column] = pd.to_numeric(
+            grouped[numeric_column], errors="coerce"
+        )
         grouped = grouped.dropna()
         if not grouped.empty:
-            groups = [g for g in grouped[group_column].astype("string").unique().tolist() if g not in {"", "<NA>"}]
+            groups = [
+                g
+                for g in grouped[group_column].astype("string").unique().tolist()
+                if g not in {"", "<NA>"}
+            ]
             if len(groups) >= 2:
-                g1 = grouped.loc[grouped[group_column].astype("string") == groups[0], numeric_column].to_numpy(dtype=float)
-                g2 = grouped.loc[grouped[group_column].astype("string") == groups[1], numeric_column].to_numpy(dtype=float)
+                g1 = grouped.loc[
+                    grouped[group_column].astype("string") == groups[0], numeric_column
+                ].to_numpy(dtype=float)
+                g2 = grouped.loc[
+                    grouped[group_column].astype("string") == groups[1], numeric_column
+                ].to_numpy(dtype=float)
                 if len(g1) >= 2 and len(g2) >= 2:
                     t_stat, t_p = ttest_ind(g1, g2, equal_var=False, nan_policy="omit")
                     hypothesis_testing["t_test"] = {
@@ -852,7 +1081,9 @@ def statistics_math_analysis(request: StatisticsMathRequest) -> Dict[str, Any]:
                     }
 
                 anova_groups = [
-                    grouped.loc[grouped[group_column].astype("string") == g, numeric_column].to_numpy(dtype=float)
+                    grouped.loc[
+                        grouped[group_column].astype("string") == g, numeric_column
+                    ].to_numpy(dtype=float)
                     for g in groups
                 ]
                 anova_groups = [arr for arr in anova_groups if len(arr) >= 2]
@@ -865,9 +1096,13 @@ def statistics_math_analysis(request: StatisticsMathRequest) -> Dict[str, Any]:
                         "p_value": float(f_p),
                     }
                 else:
-                    warnings.append("ANOVA skipped: each group needs at least 2 valid observations.")
+                    warnings.append(
+                        "ANOVA skipped: each group needs at least 2 valid observations."
+                    )
             else:
-                warnings.append("T-test/ANOVA skipped: group column needs at least two groups.")
+                warnings.append(
+                    "T-test/ANOVA skipped: group column needs at least two groups."
+                )
 
     if group_column and categorical_column:
         contingency = pd.crosstab(df[group_column], df[categorical_column])
@@ -879,23 +1114,44 @@ def statistics_math_analysis(request: StatisticsMathRequest) -> Dict[str, Any]:
                 "chi2_statistic": float(chi2),
                 "p_value": float(p_value),
                 "degrees_of_freedom": int(dof),
-                "contingency_shape": [int(contingency.shape[0]), int(contingency.shape[1])],
+                "contingency_shape": [
+                    int(contingency.shape[0]),
+                    int(contingency.shape[1]),
+                ],
             }
         else:
-            warnings.append("Chi-square skipped: contingency table needs at least 2x2 shape.")
+            warnings.append(
+                "Chi-square skipped: contingency table needs at least 2x2 shape."
+            )
 
-    ab_group_col = request.ab_group_column if request.ab_group_column in df.columns else group_column
-    ab_outcome_col = request.ab_outcome_column if request.ab_outcome_column in df.columns else None
+    ab_group_col = (
+        request.ab_group_column
+        if request.ab_group_column in df.columns
+        else group_column
+    )
+    ab_outcome_col = (
+        request.ab_outcome_column if request.ab_outcome_column in df.columns else None
+    )
     if ab_group_col and ab_outcome_col:
         ab_df = df[[ab_group_col, ab_outcome_col]].dropna().copy()
         ab_df[ab_group_col] = ab_df[ab_group_col].astype("string")
-        labels = [str(v) for v in ab_df[ab_group_col].dropna().unique().tolist() if str(v).strip()]
-        control_label = request.control_label or (labels[0] if len(labels) >= 1 else None)
-        variant_label = request.variant_label or (labels[1] if len(labels) >= 2 else None)
+        labels = [
+            str(v)
+            for v in ab_df[ab_group_col].dropna().unique().tolist()
+            if str(v).strip()
+        ]
+        control_label = request.control_label or (
+            labels[0] if len(labels) >= 1 else None
+        )
+        variant_label = request.variant_label or (
+            labels[1] if len(labels) >= 2 else None
+        )
 
         encoded = _encode_binary_outcome(ab_df[ab_outcome_col])
         if encoded is None:
-            warnings.append("A/B and Bayesian analysis skipped: outcome column could not be interpreted as binary.")
+            warnings.append(
+                "A/B and Bayesian analysis skipped: outcome column could not be interpreted as binary."
+            )
         elif control_label and variant_label:
             ab_df = ab_df.assign(__outcome=encoded)
             control_mask = ab_df[ab_group_col] == control_label
@@ -932,7 +1188,11 @@ def statistics_math_analysis(request: StatisticsMathRequest) -> Dict[str, Any]:
                         "rate": variant_rate,
                     },
                     "absolute_lift": float(variant_rate - control_rate),
-                    "relative_lift": float((variant_rate - control_rate) / control_rate) if control_rate > 0 else None,
+                    "relative_lift": (
+                        float((variant_rate - control_rate) / control_rate)
+                        if control_rate > 0
+                        else None
+                    ),
                     "z_statistic": float(z_stat),
                     "p_value": float(z_p),
                 }
@@ -944,12 +1204,20 @@ def statistics_math_analysis(request: StatisticsMathRequest) -> Dict[str, Any]:
                 variant_alpha = prior_alpha + variant_success
                 variant_beta = prior_beta + (len(variant) - variant_success)
 
-                control_ci = beta_distribution.ppf([0.025, 0.975], control_alpha, control_beta)
-                variant_ci = beta_distribution.ppf([0.025, 0.975], variant_alpha, variant_beta)
+                control_ci = beta_distribution.ppf(
+                    [0.025, 0.975], control_alpha, control_beta
+                )
+                variant_ci = beta_distribution.ppf(
+                    [0.025, 0.975], variant_alpha, variant_beta
+                )
 
                 draws = 20000
-                control_samples = np.random.beta(control_alpha, control_beta, size=draws)
-                variant_samples = np.random.beta(variant_alpha, variant_beta, size=draws)
+                control_samples = np.random.beta(
+                    control_alpha, control_beta, size=draws
+                )
+                variant_samples = np.random.beta(
+                    variant_alpha, variant_beta, size=draws
+                )
 
                 bayesian = {
                     "prior": {"alpha": prior_alpha, "beta": prior_beta},
@@ -957,21 +1225,35 @@ def statistics_math_analysis(request: StatisticsMathRequest) -> Dict[str, Any]:
                         "alpha": float(control_alpha),
                         "beta": float(control_beta),
                         "mean": float(control_alpha / (control_alpha + control_beta)),
-                        "credible_interval_95": [float(control_ci[0]), float(control_ci[1])],
+                        "credible_interval_95": [
+                            float(control_ci[0]),
+                            float(control_ci[1]),
+                        ],
                     },
                     "variant_posterior": {
                         "alpha": float(variant_alpha),
                         "beta": float(variant_beta),
                         "mean": float(variant_alpha / (variant_alpha + variant_beta)),
-                        "credible_interval_95": [float(variant_ci[0]), float(variant_ci[1])],
+                        "credible_interval_95": [
+                            float(variant_ci[0]),
+                            float(variant_ci[1]),
+                        ],
                     },
-                    "p_variant_gt_control": float(np.mean(variant_samples > control_samples)),
-                    "expected_uplift": float(np.mean(variant_samples - control_samples)),
+                    "p_variant_gt_control": float(
+                        np.mean(variant_samples > control_samples)
+                    ),
+                    "expected_uplift": float(
+                        np.mean(variant_samples - control_samples)
+                    ),
                 }
             else:
-                warnings.append("A/B and Bayesian analysis skipped: control and variant each need at least 2 rows.")
+                warnings.append(
+                    "A/B and Bayesian analysis skipped: control and variant each need at least 2 rows."
+                )
         else:
-            warnings.append("A/B and Bayesian analysis skipped: could not infer two test groups.")
+            warnings.append(
+                "A/B and Bayesian analysis skipped: could not infer two test groups."
+            )
 
     time_col = request.time_column if request.time_column in df.columns else None
     if time_col and numeric_column:
@@ -988,7 +1270,12 @@ def statistics_math_analysis(request: StatisticsMathRequest) -> Dict[str, Any]:
             sarima_order = tuple((request.sarima_order + [1, 1, 1])[:3])
             seasonal_base = (request.seasonal_order + [1, 1, 1])[:3]
             seasonal_period = max(2, int(request.seasonal_period))
-            seasonal_order = (seasonal_base[0], seasonal_base[1], seasonal_base[2], seasonal_period)
+            seasonal_order = (
+                seasonal_base[0],
+                seasonal_base[1],
+                seasonal_base[2],
+                seasonal_period,
+            )
 
             time_series = {
                 "time_column": time_col,
@@ -1024,16 +1311,24 @@ def statistics_math_analysis(request: StatisticsMathRequest) -> Dict[str, Any]:
                     "seasonal_order": list(seasonal_order),
                     "aic": float(sarima_fit.aic),
                     "bic": float(sarima_fit.bic),
-                    "forecast": [float(v) for v in np.asarray(sarima_forecast).tolist()],
+                    "forecast": [
+                        float(v) for v in np.asarray(sarima_forecast).tolist()
+                    ],
                 }
             except Exception as exc:
-                logger.error("SARIMA forecast failed: error_type=%s", type(exc).__name__)
+                logger.error(
+                    "SARIMA forecast failed: error_type=%s", type(exc).__name__
+                )
                 time_series["sarima"] = {"error": "SARIMA forecast unavailable."}
         else:
-            warnings.append("Time series analysis skipped: need at least 20 valid timestamped observations.")
+            warnings.append(
+                "Time series analysis skipped: need at least 20 valid timestamped observations."
+            )
 
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    matrix_cols = [c for c in (request.matrix_columns or numeric_cols[:6]) if c in numeric_cols]
+    matrix_cols = [
+        c for c in (request.matrix_columns or numeric_cols[:6]) if c in numeric_cols
+    ]
     if len(matrix_cols) >= 2:
         matrix_df = df[matrix_cols].apply(pd.to_numeric, errors="coerce").dropna()
         if len(matrix_df) >= 2:
@@ -1045,7 +1340,11 @@ def statistics_math_analysis(request: StatisticsMathRequest) -> Dict[str, Any]:
             eigenvalues, eigenvectors = np.linalg.eig(covariance)
             _, singular_values, _ = np.linalg.svd(X, full_matrices=False)
 
-            vector_cols = [c for c in (request.vector_columns or matrix_cols[:2]) if c in matrix_cols]
+            vector_cols = [
+                c
+                for c in (request.vector_columns or matrix_cols[:2])
+                if c in matrix_cols
+            ]
             vector_payload: Dict[str, Any] = {}
             if len(vector_cols) >= 2:
                 vec_a = matrix_df[vector_cols[0]].to_numpy(dtype=float)
@@ -1058,25 +1357,37 @@ def statistics_math_analysis(request: StatisticsMathRequest) -> Dict[str, Any]:
                     "dot_product": dot_product,
                     "norm_a": float(np.linalg.norm(vec_a)),
                     "norm_b": float(np.linalg.norm(vec_b)),
-                    "cosine_similarity": float(dot_product / denom) if denom > 0 else None,
+                    "cosine_similarity": (
+                        float(dot_product / denom) if denom > 0 else None
+                    ),
                 }
 
             linear_algebra = {
                 "matrix_columns": matrix_cols,
                 "shape": [int(X.shape[0]), int(X.shape[1])],
                 "rank": int(np.linalg.matrix_rank(X)),
-                "covariance_matrix": np.asarray(covariance, dtype=float).round(6).tolist(),
-                "correlation_matrix": np.asarray(correlation, dtype=float).round(6).tolist(),
+                "covariance_matrix": np.asarray(covariance, dtype=float)
+                .round(6)
+                .tolist(),
+                "correlation_matrix": np.asarray(correlation, dtype=float)
+                .round(6)
+                .tolist(),
                 "gram_matrix": np.asarray(gram, dtype=float).round(6).tolist(),
                 "eigenvalues": np.real(eigenvalues).astype(float).round(6).tolist(),
                 "eigenvectors": np.real(eigenvectors).astype(float).round(6).tolist(),
-                "singular_values": np.asarray(singular_values, dtype=float).round(6).tolist(),
+                "singular_values": np.asarray(singular_values, dtype=float)
+                .round(6)
+                .tolist(),
                 "vector_analysis": vector_payload,
             }
         else:
-            warnings.append("Linear algebra analysis skipped: selected matrix columns need at least 2 complete rows.")
+            warnings.append(
+                "Linear algebra analysis skipped: selected matrix columns need at least 2 complete rows."
+            )
     else:
-        warnings.append("Linear algebra analysis skipped: at least two numeric matrix columns are required.")
+        warnings.append(
+            "Linear algebra analysis skipped: at least two numeric matrix columns are required."
+        )
 
     return {
         "dataset_id": request.dataset_id,
@@ -1098,7 +1409,6 @@ def statistics_math_analysis(request: StatisticsMathRequest) -> Dict[str, Any]:
     }
 
 
-@router.post("/dataset/upload")
 @router.post("/datasets/upload")
 async def upload_dataset(file: UploadFile = File(...)) -> Dict[str, Any]:
     try:
@@ -1137,7 +1447,10 @@ async def upload_dataset(file: UploadFile = File(...)) -> Dict[str, Any]:
 
         # Use a UUID suffix to avoid ID collisions on concurrent uploads
         import uuid as _uuid
-        stem = re.sub(r"[^A-Za-z0-9_-]+", "_", (file.filename or "dataset").rsplit(".", 1)[0])
+
+        stem = re.sub(
+            r"[^A-Za-z0-9_-]+", "_", (file.filename or "dataset").rsplit(".", 1)[0]
+        )
         stem = stem.strip("_")[:40] or "dataset"
         dataset_id = f"ds_{_uuid.uuid4().hex[:8]}_{stem}"
         DATASETS[dataset_id] = df
@@ -1168,9 +1481,10 @@ async def upload_dataset(file: UploadFile = File(...)) -> Dict[str, Any]:
         ) from exc
 
 
-@router.get("/dataset/{dataset_id}")
 @router.get("/datasets/{dataset_id}")
-def get_dataset(dataset_id: str, rows: int = Query(default=100, ge=1, le=5000)) -> Dict[str, Any]:
+def get_dataset(
+    dataset_id: str, rows: int = Query(default=100, ge=1, le=5000)
+) -> Dict[str, Any]:
     if dataset_id not in DATASETS:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
@@ -1184,13 +1498,14 @@ def get_dataset(dataset_id: str, rows: int = Query(default=100, ge=1, le=5000)) 
     }
 
 
-@router.get("/dataset/list")
 @router.get("/datasets")
 def list_datasets() -> List[Dict[str, Any]]:
-    return [{"id": k, "rows": int(len(v)), "cols": int(len(v.columns))} for k, v in DATASETS.items()]
+    return [
+        {"id": k, "rows": int(len(v)), "cols": int(len(v.columns))}
+        for k, v in DATASETS.items()
+    ]
 
 
-@router.get("/dataset/{dataset_id}/download")
 @router.get("/datasets/{dataset_id}/download")
 def download_dataset(dataset_id: str, format: str = Query(default="csv")):
     if dataset_id not in DATASETS:
@@ -1208,7 +1523,9 @@ def download_dataset(dataset_id: str, format: str = Query(default="csv")):
         media_type = "application/json"
         filename = f"{dataset_id}.json"
     else:
-        raise HTTPException(status_code=400, detail="Unsupported format. Use csv or json")
+        raise HTTPException(
+            status_code=400, detail="Unsupported format. Use csv or json"
+        )
 
     return StreamingResponse(
         io.BytesIO(payload),
@@ -1217,7 +1534,6 @@ def download_dataset(dataset_id: str, format: str = Query(default="csv")):
     )
 
 
-@router.post("/dataset/{dataset_id}/clean")
 @router.post("/datasets/{dataset_id}/clean")
 def clean_dataset(dataset_id: str, request: DataCleaningRequest) -> Dict[str, Any]:
     if dataset_id not in DATASETS:
@@ -1243,16 +1559,21 @@ def clean_dataset(dataset_id: str, request: DataCleaningRequest) -> Dict[str, An
     }
 
 
-@router.post("/dataset/{dataset_id}/feature-engineer")
 @router.post("/datasets/{dataset_id}/feature-engineer")
-def save_feature_engineered_dataset(dataset_id: str, request: FeatureEngineeringSaveRequest) -> Dict[str, Any]:
+def save_feature_engineered_dataset(
+    dataset_id: str, request: FeatureEngineeringSaveRequest
+) -> Dict[str, Any]:
     if dataset_id not in DATASETS:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
     if not request.rows:
-        raise HTTPException(status_code=400, detail="Engineered dataset rows are required")
+        raise HTTPException(
+            status_code=400, detail="Engineered dataset rows are required"
+        )
     if not request.headers:
-        raise HTTPException(status_code=400, detail="Engineered dataset headers are required")
+        raise HTTPException(
+            status_code=400, detail="Engineered dataset headers are required"
+        )
 
     try:
         engineered_df = pd.DataFrame(request.rows)
@@ -1278,7 +1599,9 @@ def save_feature_engineered_dataset(dataset_id: str, request: FeatureEngineering
     engineered_id = f"{dataset_id}_features_{uuid.uuid4().hex[:12]}"
     DATASETS[engineered_id] = engineered_df
 
-    base_name = (request.name or f"{dataset_id}_engineered").strip() or f"{dataset_id}_engineered"
+    base_name = (
+        request.name or f"{dataset_id}_engineered"
+    ).strip() or f"{dataset_id}_engineered"
 
     return {
         "feature_engineering_summary": {
@@ -1307,7 +1630,9 @@ def delete_dataset(dataset_id: str) -> Dict[str, Any]:
 
 
 @router.get("/datasets/{dataset_id}/preview")
-def dataset_preview(dataset_id: str, rows: int = Query(default=10, ge=1, le=500)) -> Dict[str, Any]:
+def dataset_preview(
+    dataset_id: str, rows: int = Query(default=10, ge=1, le=500)
+) -> Dict[str, Any]:
     return get_dataset(dataset_id=dataset_id, rows=rows)
 
 
@@ -1346,10 +1671,25 @@ def preprocess_data(request: PreprocessRequest) -> Dict[str, Any]:
 @router.get("/preprocess/options")
 def get_preprocessing_options() -> Dict[str, List[str]]:
     return {
-        "handle_missing": ["auto", "drop", "mean", "median", "mode", "knn", "iterative"],
+        "handle_missing": [
+            "auto",
+            "drop",
+            "mean",
+            "median",
+            "mode",
+            "knn",
+            "iterative",
+        ],
         "handle_outliers": ["none", "clip", "remove", "winsorize", "isolation_forest"],
         "encode_categorical": ["auto", "onehot", "label", "target", "frequency"],
-        "scale_features": ["none", "standard", "minmax", "robust", "maxabs", "quantile"],
+        "scale_features": [
+            "none",
+            "standard",
+            "minmax",
+            "robust",
+            "maxabs",
+            "quantile",
+        ],
         "feature_selection": ["none", "correlation", "variance", "rfe", "mutual_info"],
     }
 
@@ -1364,7 +1704,11 @@ def run_eda(dataset_id: str = Query(...)) -> Dict[str, Any]:
 
 
 @router.post("/eda/statistical-tests")
-def statistical_tests(dataset_id: str = Query(...), column1: str = Query(...), column2: Optional[str] = Query(default=None)) -> Dict[str, Any]:
+def statistical_tests(
+    dataset_id: str = Query(...),
+    column1: str = Query(...),
+    column2: Optional[str] = Query(default=None),
+) -> Dict[str, Any]:
     if dataset_id not in DATASETS:
         raise HTTPException(status_code=404, detail="Dataset not found")
 
@@ -1382,7 +1726,9 @@ def train_models(request: TrainRequest) -> Dict[str, Any]:
 
     df = DATASETS[request.dataset_id]
     if request.target_column not in df.columns:
-        raise HTTPException(status_code=400, detail=f"Target column '{request.target_column}' not found")
+        raise HTTPException(
+            status_code=400, detail=f"Target column '{request.target_column}' not found"
+        )
 
     results = ml_engine.train_all_models(
         df=df,
@@ -1395,7 +1741,9 @@ def train_models(request: TrainRequest) -> Dict[str, Any]:
         test_size=request.test_size,
     )
 
-    model_id = f"model_{request.dataset_id}_{request.target_column}_{uuid.uuid4().hex[:8]}"
+    model_id = (
+        f"model_{request.dataset_id}_{request.target_column}_{uuid.uuid4().hex[:8]}"
+    )
     TRAINED_MODELS[model_id] = {
         **results["best_model"],
         "task_type": results.get("task_type"),
@@ -1432,17 +1780,24 @@ def cluster_dataset(request: ClusterRequest) -> Dict[str, Any]:
     x_columns = request.x_columns or df.columns.tolist()
     missing = [c for c in x_columns if c not in df.columns]
     if missing:
-        raise HTTPException(status_code=400, detail=f"Unknown clustering columns: {missing}")
+        raise HTTPException(
+            status_code=400, detail=f"Unknown clustering columns: {missing}"
+        )
 
     prepared = _encode_features(df[x_columns]).dropna().copy()
     if len(prepared) < 5:
-        raise HTTPException(status_code=400, detail="Not enough valid rows for clustering")
+        raise HTTPException(
+            status_code=400, detail="Not enough valid rows for clustering"
+        )
 
     numeric_prepared = prepared.select_dtypes(include=[np.number])
     if numeric_prepared.empty:
-        raise HTTPException(status_code=400, detail="Clustering requires numeric or encoded features")
+        raise HTTPException(
+            status_code=400, detail="Clustering requires numeric or encoded features"
+        )
 
     from sklearn.preprocessing import StandardScaler
+
     scaler = StandardScaler()
     x_np = scaler.fit_transform(numeric_prepared)
 
@@ -1459,13 +1814,15 @@ def cluster_dataset(request: ClusterRequest) -> Dict[str, Any]:
     for idx, lbl in zip(prepared.index.tolist(), labels):
         row_index = int(idx) if isinstance(idx, (int, np.integer)) else str(idx)
         cluster_value = int(lbl) if isinstance(lbl, (int, np.integer)) else -1
-        assignments.append({
-            "row_index": row_index,
-            "cluster": cluster_value,
-        })
+        assignments.append(
+            {
+                "row_index": row_index,
+                "cluster": cluster_value,
+            }
+        )
 
     preview_rows = prepared.head(min(100, len(prepared))).copy()
-    preview_labels = labels[:len(preview_rows)]
+    preview_labels = labels[: len(preview_rows)]
     preview_rows["cluster"] = preview_labels
 
     model_id = f"cluster_{request.dataset_id}_{uuid.uuid4().hex[:8]}"
@@ -1500,7 +1857,9 @@ def cluster_dataset(request: ClusterRequest) -> Dict[str, Any]:
                 "category": "Clustering",
                 "silhouette": outcome.get("metrics", {}).get("silhouette"),
                 "inertia": outcome.get("metrics", {}).get("inertia"),
-                "calinski_harabasz": outcome.get("metrics", {}).get("calinski_harabasz"),
+                "calinski_harabasz": outcome.get("metrics", {}).get(
+                    "calinski_harabasz"
+                ),
                 "davies_bouldin": outcome.get("metrics", {}).get("davies_bouldin"),
             }
         ],
@@ -1515,17 +1874,72 @@ def cluster_dataset(request: ClusterRequest) -> Dict[str, Any]:
 def train_selected_model(request: SelectedModelTrainRequest) -> Dict[str, Any]:
     if request.dataset_id not in DATASETS:
         raise HTTPException(status_code=404, detail="Dataset not found")
+    df = DATASETS[request.dataset_id].copy()
+    missing_x = [c for c in request.x_columns if c not in df.columns]
+    missing_y = [c for c in request.y_columns if c not in df.columns]
+    if missing_x or missing_y:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown columns. Missing X: {missing_x}, Missing Y: {missing_y}",
+        )
+    if set(request.x_columns) & set(request.y_columns):
+        raise HTTPException(status_code=400, detail="X and Y columns must not overlap")
+
+    result = train_model(
+        df=df,
+        x_columns=request.x_columns,
+        y_columns=request.y_columns,
+        model_name=request.model_name,
+        task_type=request.task_type,
+        test_size=request.test_size,
+        random_state=request.random_state,
+        cv_folds=request.cv_folds,
+    )
+    model_id = f"selected_{request.dataset_id}_{uuid.uuid4().hex[:8]}"
+    TRAINED_MODELS[model_id] = {
+        "model": result["pipeline"],
+        "pipeline": result["pipeline"],
+        "task_type": result["task_type"],
+        "source": "train-selected",
+        "model_name": result["model_name"],
+        "x_columns": request.x_columns,
+        "y_columns": request.y_columns,
+        "dataset_id": request.dataset_id,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return {
+        **result,
+        "pipeline": None,
+        "model_id": model_id,
+        "trainingTime": result["training_time"],
+        "training_time": result["training_time"],
+        "target_count": len(request.y_columns),
+        "models": [
+            {"type": result["model_name"], "category": "Selected", **result["metrics"]}
+        ],
+        "best_model": result["model_name"],
+    }
+
+
+def legacy_train_selected_model(request: SelectedModelTrainRequest) -> Dict[str, Any]:
+    if request.dataset_id not in DATASETS:
+        raise HTTPException(status_code=404, detail="Dataset not found")
 
     df = DATASETS[request.dataset_id].copy()
     if not request.x_columns:
-        raise HTTPException(status_code=400, detail="At least one X feature is required")
+        raise HTTPException(
+            status_code=400, detail="At least one X feature is required"
+        )
     if not request.y_columns:
         raise HTTPException(status_code=400, detail="At least one Y target is required")
 
     missing_x = [c for c in request.x_columns if c not in df.columns]
     missing_y = [c for c in request.y_columns if c not in df.columns]
     if missing_x or missing_y:
-        raise HTTPException(status_code=400, detail=f"Unknown columns. Missing X: {missing_x}, Missing Y: {missing_y}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown columns. Missing X: {missing_x}, Missing Y: {missing_y}",
+        )
 
     if set(request.x_columns) & set(request.y_columns):
         raise HTTPException(status_code=400, detail="X and Y columns must not overlap")
@@ -1533,13 +1947,19 @@ def train_selected_model(request: SelectedModelTrainRequest) -> Dict[str, Any]:
     task_type = _infer_task_type(df, request.y_columns, request.task_type)
 
     if task_type in {"classification", "regression"} and len(request.y_columns) != 1:
-        raise HTTPException(status_code=400, detail="Selected model/task requires exactly one Y target")
+        raise HTTPException(
+            status_code=400, detail="Selected model/task requires exactly one Y target"
+        )
     if task_type == "multi_output" and len(request.y_columns) < 2:
-        raise HTTPException(status_code=400, detail="Multi-output requires at least two Y targets")
+        raise HTTPException(
+            status_code=400, detail="Multi-output requires at least two Y targets"
+        )
 
     base = df[request.x_columns + request.y_columns].dropna().copy()
     if len(base) < 10:
-        raise HTTPException(status_code=400, detail="Not enough valid rows after preprocessing")
+        raise HTTPException(
+            status_code=400, detail="Not enough valid rows after preprocessing"
+        )
 
     x_df = _encode_features(base[request.x_columns])
     y_df = base[request.y_columns].copy()
@@ -1652,11 +2072,15 @@ def train_selected_model(request: SelectedModelTrainRequest) -> Dict[str, Any]:
         if resolved_task in {"classification", "regression"}:
             if resolved_task == "classification":
                 cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-                cv_scores = cross_val_score(clone(model), x_train, y_train, cv=cv, scoring="accuracy")
+                cv_scores = cross_val_score(
+                    clone(model), x_train, y_train, cv=cv, scoring="accuracy"
+                )
                 holdout_score = float(metrics.get("accuracy", 0.0))
             else:
                 cv = KFold(n_splits=5, shuffle=True, random_state=42)
-                cv_scores = cross_val_score(clone(model), x_train, y_train, cv=cv, scoring="r2")
+                cv_scores = cross_val_score(
+                    clone(model), x_train, y_train, cv=cv, scoring="r2"
+                )
                 holdout_score = float(metrics.get("r2", 0.0))
 
             cv_mean = float(np.mean(cv_scores))
@@ -1668,8 +2092,16 @@ def train_selected_model(request: SelectedModelTrainRequest) -> Dict[str, Any]:
             metrics["cv_std"] = cv_std
             metrics["bias_proxy"] = float(bias_proxy)
             metrics["variance_proxy"] = float(variance_proxy)
-            metrics["bias_level"] = "High" if bias_proxy > 0.08 else "Moderate" if bias_proxy > 0.03 else "Low"
-            metrics["variance_level"] = "High" if variance_proxy > 0.08 else "Moderate" if variance_proxy > 0.03 else "Low"
+            metrics["bias_level"] = (
+                "High"
+                if bias_proxy > 0.08
+                else "Moderate" if bias_proxy > 0.03 else "Low"
+            )
+            metrics["variance_level"] = (
+                "High"
+                if variance_proxy > 0.08
+                else "Moderate" if variance_proxy > 0.03 else "Low"
+            )
     except Exception:
         pass
 
@@ -1680,16 +2112,18 @@ def train_selected_model(request: SelectedModelTrainRequest) -> Dict[str, Any]:
         "type": request.model_name,
         "category": "Selected",
     }
-    model_summary.update({
-        "accuracy": metrics.get("accuracy"),
-        "precision": metrics.get("precision"),
-        "recall": metrics.get("recall"),
-        "f1": metrics.get("f1"),
-        "r2": metrics.get("r2"),
-        "mae": metrics.get("mae"),
-        "mse": metrics.get("mse"),
-        "rmse": metrics.get("rmse"),
-    })
+    model_summary.update(
+        {
+            "accuracy": metrics.get("accuracy"),
+            "precision": metrics.get("precision"),
+            "recall": metrics.get("recall"),
+            "f1": metrics.get("f1"),
+            "r2": metrics.get("r2"),
+            "mae": metrics.get("mae"),
+            "mse": metrics.get("mse"),
+            "rmse": metrics.get("rmse"),
+        }
+    )
 
     model_id = f"selected_{request.dataset_id}_{uuid.uuid4().hex[:8]}"
     TRAINED_MODELS[model_id] = {
@@ -1735,7 +2169,9 @@ def download_trained_model(model_id: str, format: str = Query(default="pkl")):
         raise HTTPException(status_code=404, detail="Model not found")
 
     stored_model = TRAINED_MODELS[model_id]
-    model_bundle = stored_model if isinstance(stored_model, dict) else {"model": stored_model}
+    model_bundle = (
+        stored_model if isinstance(stored_model, dict) else {"model": stored_model}
+    )
     fmt = format.strip().lower()
     model_name = str(model_bundle.get("model_name") or model_id).replace(" ", "_")
 
@@ -1765,7 +2201,9 @@ def download_trained_model(model_id: str, format: str = Query(default="pkl")):
         filename = f"{model_name}_{model_id}.json"
         media_type = "application/json"
     else:
-        raise HTTPException(status_code=400, detail="Unsupported format. Use pkl, joblib, or json")
+        raise HTTPException(
+            status_code=400, detail="Unsupported format. Use pkl, joblib, or json"
+        )
 
     return StreamingResponse(
         io.BytesIO(payload),
@@ -1780,7 +2218,9 @@ def gpu_status() -> Dict[str, Any]:
 
 
 @router.post("/explain/shap")
-def get_shap_values(dataset_id: str, model_id: str, num_samples: int = 100) -> Dict[str, Any]:
+def get_shap_values(
+    dataset_id: str, model_id: str, num_samples: int = 100
+) -> Dict[str, Any]:
     if model_id not in TRAINED_MODELS:
         raise HTTPException(status_code=404, detail="Model not found")
     if dataset_id not in DATASETS:
@@ -1810,10 +2250,25 @@ def predict(request: PredictRequest) -> Dict[str, Any]:
 
     model_data = TRAINED_MODELS[request.model_id]
     model = model_data["model"]
+    pipeline = model_data.get("pipeline")
     scaler = model_data.get("scaler")
     feature_names = model_data.get("feature_names", [])
 
     df = pd.DataFrame(request.data)
+
+    if pipeline is not None:
+        try:
+            predictions = pipeline.predict(df[model_data["x_columns"]])
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400, detail=f"Prediction data is invalid: {exc}"
+            ) from exc
+        result: Dict[str, Any] = {"predictions": predictions.tolist()}
+        if hasattr(pipeline, "predict_proba"):
+            result["probabilities"] = pipeline.predict_proba(
+                df[model_data["x_columns"]]
+            ).tolist()
+        return result
 
     if request.dataset_id in PREPROCESSORS:
         df = PREPROCESSORS[request.dataset_id].transform(df)
@@ -1850,7 +2305,9 @@ def chat(request: ChatRequest) -> Dict[str, Any]:
         f" You asked: '{request.message}'.{dataset_hint}"
     )
 
-    CHAT_HISTORY.setdefault(session_id, []).append({"role": "user", "content": request.message})
+    CHAT_HISTORY.setdefault(session_id, []).append(
+        {"role": "user", "content": request.message}
+    )
     CHAT_HISTORY[session_id].append({"role": "assistant", "content": response})
 
     return {"response": response, "session_id": session_id}
@@ -1867,7 +2324,9 @@ def query(req: QueryRequest) -> Dict[str, Any]:
         "Query received. Use /api/analysis/auto for automated EDA/ML workflows "
         "or /api/chat for conversational guidance."
     )
-    CHAT_HISTORY.setdefault(req.session_id, []).append({"role": "user", "content": req.query})
+    CHAT_HISTORY.setdefault(req.session_id, []).append(
+        {"role": "user", "content": req.query}
+    )
     CHAT_HISTORY[req.session_id].append({"role": "assistant", "content": response})
     return {
         "job_id": f"job_{len(CHAT_HISTORY[req.session_id])}",
@@ -1903,23 +2362,39 @@ def analysis_auto(req: AutoAnalysisRequest) -> Dict[str, Any]:
             result["ml"] = {"status": "skipped", "reason": "target_column not found"}
         else:
             try:
-                ml = ml_engine.train_all_models(
+                ml = train_model(
                     df=df,
-                    target_column=req.target_column,
-                    task_type=req.model_type,
-                    use_gpu=True,
+                    x_columns=[c for c in df.columns if c != req.target_column],
+                    y_columns=[req.target_column],
+                    model_name=req.model_type,
+                    task_type="auto",
                 )
                 model_id = f"model_{req.dataset_id}_{req.target_column}"
-                TRAINED_MODELS[model_id] = ml["best_model"]
+                TRAINED_MODELS[model_id] = {
+                    "model": ml["pipeline"],
+                    "pipeline": ml["pipeline"],
+                    "task_type": ml["task_type"],
+                    "source": "analysis-auto",
+                    "model_name": ml["model_name"],
+                    "x_columns": ml["x_columns"],
+                    "y_columns": ml["y_columns"],
+                    "dataset_id": req.dataset_id,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
                 result["ml"] = {
                     "model_id": model_id,
-                    "task_type": ml.get("task_type"),
-                    "best_model_name": ml.get("best_model_name"),
-                    "models": ml.get("models", []),
+                    "task_type": ml["task_type"],
+                    "best_model_name": ml["model_name"],
+                    "metrics": ml["metrics"],
+                    "cv_std": ml["cv_std"],
                 }
+            except HTTPException:
+                raise
             except Exception as exc:
                 logger.error("ML training failed: error_type=%s", type(exc).__name__)
-                raise HTTPException(status_code=500, detail="ML training failed.") from exc
+                raise HTTPException(
+                    status_code=500, detail="ML training failed."
+                ) from exc
 
     return result
 
@@ -1940,24 +2415,30 @@ def generate_report(
 
     # Record in history
     if session_id:
-        REPORT_HISTORY.setdefault(session_id, []).append({
-            "report_id": report_id,
-            "dataset_id": dataset_id,
-            "type": type,
-            "created_at": now,
-        })
+        REPORT_HISTORY.setdefault(session_id, []).append(
+            {
+                "report_id": report_id,
+                "dataset_id": dataset_id,
+                "type": type,
+                "created_at": now,
+            }
+        )
 
     if type == "pdf":
         try:
             from reports.pdf_generator import EDAPDFReport
         except ImportError:
-            raise HTTPException(status_code=503, detail="PDF generation dependencies not available")
+            raise HTTPException(
+                status_code=503, detail="PDF generation dependencies not available"
+            )
 
         pdf_bytes = EDAPDFReport(df, dataset_name=dataset_id).generate_report()
         return StreamingResponse(
             io.BytesIO(pdf_bytes),
             media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="report_{dataset_id}.pdf"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="report_{dataset_id}.pdf"'
+            },
         )
 
     # JSON summary report
@@ -2000,7 +2481,9 @@ def kaggle_search(req: KaggleSearchRequest) -> Dict[str, Any]:
         }
     except Exception as exc:
         logger.error("Kaggle search unavailable: error_type=%s", type(exc).__name__)
-        raise HTTPException(status_code=503, detail="Kaggle search unavailable.") from exc
+        raise HTTPException(
+            status_code=503, detail="Kaggle search unavailable."
+        ) from exc
 
 
 @router.post("/kaggle/download")
@@ -2018,7 +2501,9 @@ def kaggle_download(req: KaggleDownloadRequest) -> Dict[str, Any]:
 
         csv_files = [f for f in os.listdir(download_path) if f.lower().endswith(".csv")]
         if not csv_files:
-            raise HTTPException(status_code=400, detail="Downloaded dataset has no CSV file")
+            raise HTTPException(
+                status_code=400, detail="Downloaded dataset has no CSV file"
+            )
 
         df = pd.read_csv(os.path.join(download_path, csv_files[0]))
         dataset_id = f"ds_{len(DATASETS)}_{req.dataset_ref.replace('/', '_')}"
@@ -2036,4 +2521,6 @@ def kaggle_download(req: KaggleDownloadRequest) -> Dict[str, Any]:
         raise
     except Exception as exc:
         logger.error("Kaggle download unavailable: error_type=%s", type(exc).__name__)
-        raise HTTPException(status_code=503, detail="Kaggle download unavailable.") from exc
+        raise HTTPException(
+            status_code=503, detail="Kaggle download unavailable."
+        ) from exc

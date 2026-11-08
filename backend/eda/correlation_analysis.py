@@ -272,6 +272,7 @@ class CorrelationAnalyzer:
                 )
             except (ValueError, RuntimeError, np.linalg.LinAlgError) as e:
                 import logging
+
                 logging.debug(f"VIF calculation failed for {col}: {e}")
                 continue
 

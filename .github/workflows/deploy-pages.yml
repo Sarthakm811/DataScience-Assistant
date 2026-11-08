@@ -34,8 +34,6 @@ jobs:
       - name: Build frontend
         env:
           VITE_API_URL: https://datascience-researchassistant.onrender.com
-          VITE_API_KEY: ${{ secrets.VITE_API_KEY }}
-          VITE_TENANT_ID: prod-tenant-1
         run: npm --prefix frontend run build -- --mode production
 
       - name: Enable SPA fallback

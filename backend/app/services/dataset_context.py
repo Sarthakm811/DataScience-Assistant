@@ -47,7 +47,9 @@ def build_dataframe_context(df: pd.DataFrame, sample_rows: int = 5) -> Dict[str,
         "dtypes": {column: str(dtype) for column, dtype in df.dtypes.items()},
         "sample_rows": sample.to_dict("records"),
         "numeric_summary": numeric_summary,
-        "missing_values": {column: int(count) for column, count in missing_values.items()},
+        "missing_values": {
+            column: int(count) for column, count in missing_values.items()
+        },
     }
 
 
@@ -57,7 +59,9 @@ def format_dataframe_context(df: pd.DataFrame, sample_rows: int = 5) -> str:
 
     lines: List[str] = []
     lines.append(f"Shape: {context['shape'][0]} rows x {context['shape'][1]} columns")
-    lines.append(f"Columns: {', '.join(map(str, context['columns'])) if context['columns'] else 'None'}")
+    lines.append(
+        f"Columns: {', '.join(map(str, context['columns'])) if context['columns'] else 'None'}"
+    )
     lines.append("Dtypes:")
     for column, dtype in context["dtypes"].items():
         lines.append(f"- {column}: {dtype}")
@@ -76,7 +80,17 @@ def format_dataframe_context(df: pd.DataFrame, sample_rows: int = 5) -> str:
         lines.append("Numeric summary:")
         for column, summary in context["numeric_summary"].items():
             parts = []
-            for key in ["mean", "std", "min", "25%", "50%", "75%", "max", "skewness", "kurtosis"]:
+            for key in [
+                "mean",
+                "std",
+                "min",
+                "25%",
+                "50%",
+                "75%",
+                "max",
+                "skewness",
+                "kurtosis",
+            ]:
                 if key in summary and summary[key] is not None:
                     value = summary[key]
                     if isinstance(value, (int, float)):

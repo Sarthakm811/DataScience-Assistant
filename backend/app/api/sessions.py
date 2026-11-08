@@ -14,12 +14,15 @@ def create_session(req: SessionCreate):
     session_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
 
-    get_store().set_session(session_id, {
-        "session_id": session_id,
-        "user_id": req.user_id,
-        "created_at": now,
-        "last_activity": now,
-    })
+    get_store().set_session(
+        session_id,
+        {
+            "session_id": session_id,
+            "user_id": req.user_id,
+            "created_at": now,
+            "last_activity": now,
+        },
+    )
 
     return SessionResponse(session_id=session_id, created_at=now, last_activity=now)
 

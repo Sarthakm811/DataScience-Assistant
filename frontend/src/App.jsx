@@ -2,6 +2,7 @@ import React, { Suspense, lazy, useEffect, useState } from 'react'
 import { HashRouter as Router, Routes, Route, useLocation } from 'react-router-dom'
 import Sidebar from './components/Sidebar'
 import Header from './components/Header'
+import Login from './pages/Login'
 import { AnalysisProvider } from './context/AnalysisContext'
 import { ErrorBoundary } from './components/ErrorBoundary'
 
@@ -69,9 +70,17 @@ function AppLayout({ dataset, setDataset, isMobile, sidebarOpen, setSidebarOpen 
 }
 
 function App() {
+    const apiBase = import.meta.env.VITE_API_URL || ''
     const [ dataset, setDataset ] = useState(null)
     const [ isMobile, setIsMobile ] = useState(false)
     const [ sidebarOpen, setSidebarOpen ] = useState(true)
+    const [ authenticated, setAuthenticated ] = useState(null)
+
+    useEffect(() => {
+        fetch(`${apiBase}/api/auth/me`, { credentials: 'include' })
+            .then((response) => setAuthenticated(response.ok))
+            .catch(() => setAuthenticated(false))
+    }, [])
 
     useEffect(() => {
         const handleResize = () => {
@@ -84,6 +93,13 @@ function App() {
         window.addEventListener('resize', handleResize)
         return () => window.removeEventListener('resize', handleResize)
     }, [])
+
+    if (authenticated === null) {
+        return <div className="flex min-h-screen items-center justify-center">Loading...</div>
+    }
+    if (!authenticated) {
+        return <Login onAuthenticated={() => setAuthenticated(true)} />
+    }
 
     return (
         <AnalysisProvider>

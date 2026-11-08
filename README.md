@@ -1,34 +1,34 @@
 # DataScience Assistant
 
-Production-ready data science assistant with:
+Data science assistant with:
 - FastAPI backend for dataset processing, EDA, ML, statistics, and reporting
 - React + Vite frontend for interactive workflows
-- Optional Express fallback server in frontend/server.js
 
 ## Architecture
 
 - frontend: React app (Vite)
 - backend: FastAPI API and ML/EDA runtime
-- infra: Kubernetes deployment manifests
+- infra: deployment manifests
 - docs: additional project documentation
 
-## Core Features
+## Feature status
 
-- Dataset upload and management
-- Auto EDA and rich visual summaries
-- Auto ML training and model comparison
-- Statistics and mathematics lab (tests, confidence intervals, A/B, Bayesian, ARIMA/SARIMA)
-- Feature engineering and data cleaning workflows
-- Report generation with integrated insights
+- **Implemented:** Dataset upload, in-memory dataset management, EDA, visual summaries,
+  model training/comparison, statistics, feature engineering, data cleaning, and PDF
+  report generation.
+- **Optional integrations:** Gemini-powered analysis, LangChain queries, and Kaggle
+  dataset search/download require their corresponding credentials.
+- **Not persisted:** Uploaded datasets, trained models, sessions, and chat history are
+  held in memory and are lost whenever the backend restarts.
 
 ## Security Model
 
 Runtime API is protected by:
-- X-API-Key header
-- X-Tenant-Id header
+- Argon2-hashed user accounts
+- short-lived JWTs stored in HttpOnly cookies
+- tenant isolation derived from the authenticated user ID
 
 Backend defaults enforce:
-- API key validation
 - tenant isolation in in-memory runtime stores
 - code execution disabled unless explicitly enabled
 
@@ -49,7 +49,6 @@ Create backend/.env (or edit existing) with at least:
 ```env
 GEMINI_API_KEY=your_gemini_key
 SECRET_KEY=your_strong_secret
-ENFORCE_API_KEY=true
 ENFORCE_TENANT_ISOLATION=true
 ALLOW_CODE_EXECUTION=false
 ```
@@ -57,7 +56,8 @@ ALLOW_CODE_EXECUTION=false
 Run backend:
 
 ```bash
-uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
+cd backend
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 ### 2. Frontend setup
@@ -71,8 +71,6 @@ Use frontend/.env.development:
 
 ```env
 VITE_API_URL=http://localhost:8000
-VITE_API_KEY=match_backend_secret_key
-VITE_TENANT_ID=local-dev-tenant
 ```
 
 ## Testing and Validation
@@ -88,8 +86,8 @@ npm --prefix frontend run build
 
 ### Backend
 
-- Container deployment supported via infra/k8s
-- Ensure SECRET_KEY and DATABASE_URL are provided from secrets
+- Container deployment is supported via the backend Dockerfile and deployment manifests.
+- Ensure SECRET_KEY and any required integration credentials are provided from secrets.
 - Keep ALLOW_CODE_EXECUTION=false unless you have strong sandbox isolation
 - If code execution is enabled, also set EXECUTION_SANDBOX_CONFIRMED=true only when
   the worker is deployed inside an independently isolated sandbox.
@@ -103,29 +101,18 @@ Root vercel.json is configured for monorepo deployment:
 
 Set Vercel environment variables:
 - VITE_API_URL
-- VITE_API_KEY
-- VITE_TENANT_ID
 
 ## Environment Variables Reference
 
 Backend important vars:
 - GEMINI_API_KEY
 - SECRET_KEY
-- ENFORCE_API_KEY
 - ENFORCE_TENANT_ISOLATION
 - ALLOW_CODE_EXECUTION
 - DATABASE_URL
-- REDIS_URL
 
 Frontend important vars:
 - VITE_API_URL
-- VITE_API_KEY
-- VITE_TENANT_ID
-
-## Notes
-
-- frontend/server.js is optional and intended for local fallback/testing paths.
-- Primary production API should be backend/app/main.py FastAPI service.
 
 ## License
 

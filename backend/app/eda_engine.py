@@ -13,9 +13,9 @@ class EDAEngine:
         correlations = self._correlations(df)
         missing_data = self._missing_data(df)
         categorical = self._categorical_analysis(df)
-        
+
         quality_score = self._calculate_quality_score(df, missing_data, stats)
-        
+
         return {
             "summary": self._summary(df),
             "statistics": stats,
@@ -26,15 +26,21 @@ class EDAEngine:
             "insights": self._generate_insights(df, missing_data, stats, correlations),
             "trendInsights": self._get_trend_insights(df, stats),
             "segmentationInsights": self._get_segmentation_insights(df, categorical),
-            "behavioralInsights": self._get_behavioral_insights(df, stats, correlations),
-            "comparativeInsights": self._get_comparative_insights(df, stats, categorical),
+            "behavioralInsights": self._get_behavioral_insights(
+                df, stats, correlations
+            ),
+            "comparativeInsights": self._get_comparative_insights(
+                df, stats, categorical
+            ),
             "recommendations": self._recommendations(df),
             "numericColumns": [s["name"] for s in stats],
             "dateColumns": self._detect_date_columns(df),
             "typeCount": self._get_type_counts(df),
-            "qualityRadar": self._get_quality_radar(quality_score, missing_data, stats, df),
+            "qualityRadar": self._get_quality_radar(
+                quality_score, missing_data, stats, df
+            ),
             "missingHeatmap": self._get_missing_heatmap(df),
-            "correlationHeatmap": self._get_correlation_heatmap(df)
+            "correlationHeatmap": self._get_correlation_heatmap(df),
         }
 
     def statistical_tests(
@@ -42,7 +48,7 @@ class EDAEngine:
     ) -> Dict[str, Any]:
         """Run a lightweight statistical test suite for one or two columns."""
         from scipy.stats import chi2_contingency, mannwhitneyu, ttest_ind
-        
+
         if column1 not in df.columns:
             raise ValueError(f"Column not found: {column1}")
 
@@ -67,7 +73,9 @@ class EDAEngine:
             result["comparison"] = {"error": f"No non-null values in column: {column2}"}
             return result
 
-        if pd.api.types.is_numeric_dtype(series1) and pd.api.types.is_numeric_dtype(series2):
+        if pd.api.types.is_numeric_dtype(series1) and pd.api.types.is_numeric_dtype(
+            series2
+        ):
             paired = pd.DataFrame({"a": series1, "b": series2}).dropna()
             if len(paired) < 3:
                 result["comparison"] = {"error": "Insufficient paired numeric samples"}
@@ -107,27 +115,34 @@ class EDAEngine:
         missing_cells = int(df.isna().sum().sum())
         num_cols = len(df.select_dtypes(include=[np.number]).columns)
         cat_cols = len(df.select_dtypes(exclude=[np.number]).columns)
-        
+
         # Calculate outliers across all columns
         outlier_total = 0
         num_df = df.select_dtypes(include=[np.number])
         for col in num_df.columns:
             s = num_df[col].dropna()
-            if s.empty: continue
+            if s.empty:
+                continue
             q1, q3 = s.quantile(0.25), s.quantile(0.75)
             iqr = q3 - q1
-            outlier_total += int(((s < (q1 - 1.5 * iqr)) | (s > (q3 + 1.5 * iqr))).sum())
+            outlier_total += int(
+                ((s < (q1 - 1.5 * iqr)) | (s > (q3 + 1.5 * iqr))).sum()
+            )
 
         return {
             "rows": int(df.shape[0]),
             "columns": int(df.shape[1]),
             "numericCols": num_cols,
             "categoricalCols": cat_cols,
-            "memory_usage_mb": round(float(df.memory_usage(deep=True).sum() / (1024**2)), 2),
+            "memory_usage_mb": round(
+                float(df.memory_usage(deep=True).sum() / (1024**2)), 2
+            ),
             "duplicateRows": int(df.duplicated().sum()),
             "missingTotal": missing_cells,
-            "missing_percentage": round((missing_cells / total_cells) * 100, 2) if total_cells else 0.0,
-            "outlierTotal": outlier_total
+            "missing_percentage": (
+                round((missing_cells / total_cells) * 100, 2) if total_cells else 0.0
+            ),
+            "outlierTotal": outlier_total,
         }
 
     def _data_types(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
@@ -168,15 +183,18 @@ class EDAEngine:
         results = []
         for col in df.columns:
             count = int(missing[col])
-            results.append({
-                "name": col,
-                "missing": count,
-                "percentage": round((count / n_rows) * 100, 2)
-            })
+            results.append(
+                {
+                    "name": col,
+                    "missing": count,
+                    "percentage": round((count / n_rows) * 100, 2),
+                }
+            )
         return results
 
     def _statistics(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
         import numpy as np
+
         num = df.select_dtypes(include=[np.number])
         if num.empty:
             return []
@@ -217,8 +235,10 @@ class EDAEngine:
                 try:
                     m_counts, _ = np.histogram(s, bins=min(30, unique_vals))
                     peaks = [
-                        i for i in range(1, len(m_counts) - 1)
-                        if m_counts[i] > m_counts[i - 1] and m_counts[i] > m_counts[i + 1]
+                        i
+                        for i in range(1, len(m_counts) - 1)
+                        if m_counts[i] > m_counts[i - 1]
+                        and m_counts[i] > m_counts[i + 1]
                     ]
                     modality = "Multimodal" if len(peaks) > 1 else "Unimodal"
                 except Exception:
@@ -228,27 +248,36 @@ class EDAEngine:
             std_val = float(desc.get("std", 0) or 0)
             cv = round((std_val / mean_val * 100), 2) if mean_val != 0 else 0
 
-            results.append({
-                "name": col,
-                "mean": mean_val,
-                "median": float(desc.get("50%", 0) or 0),
-                "std": std_val,
-                "min": float(desc.get("min", 0) or 0),
-                "max": float(desc.get("max", 0) or 0),
-                "q1": float(q1),
-                "q3": float(q3),
-                "outlierCount": outliers,
-                "outlierPercentage": round((outliers / n_rows) * 100, 2) if n_rows else 0,
-                "skewness": round(skew, 3),
-                "trend": "symmetric" if abs(skew) < 0.5 else ("right-skewed" if skew > 0 else "left-skewed"),
-                "modality": modality,
-                "cv": cv,
-                "distribution": distribution,
-            })
+            results.append(
+                {
+                    "name": col,
+                    "mean": mean_val,
+                    "median": float(desc.get("50%", 0) or 0),
+                    "std": std_val,
+                    "min": float(desc.get("min", 0) or 0),
+                    "max": float(desc.get("max", 0) or 0),
+                    "q1": float(q1),
+                    "q3": float(q3),
+                    "outlierCount": outliers,
+                    "outlierPercentage": (
+                        round((outliers / n_rows) * 100, 2) if n_rows else 0
+                    ),
+                    "skewness": round(skew, 3),
+                    "trend": (
+                        "symmetric"
+                        if abs(skew) < 0.5
+                        else ("right-skewed" if skew > 0 else "left-skewed")
+                    ),
+                    "modality": modality,
+                    "cv": cv,
+                    "distribution": distribution,
+                }
+            )
         return results
 
     def _correlations(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
         import numpy as np
+
         num = df.select_dtypes(include=[np.number])
         if num.shape[1] < 2:
             return []
@@ -259,7 +288,11 @@ class EDAEngine:
 
         # Sample rows for scatter plots — cap at 200 for UI performance
         n_after_dropna = len(num.dropna())
-        sample_df = num.dropna().sample(min(200, n_after_dropna), random_state=42) if n_after_dropna > 0 else num.dropna()
+        sample_df = (
+            num.dropna().sample(min(200, n_after_dropna), random_state=42)
+            if n_after_dropna > 0
+            else num.dropna()
+        )
 
         for i in range(len(cols)):
             for j in range(i + 1, len(cols)):
@@ -267,25 +300,33 @@ class EDAEngine:
                 if not np.isnan(value):
                     abs_val = abs(value)
                     strength = "Weak"
-                    if abs_val >= 0.9: strength = "Very Strong"
-                    elif abs_val >= 0.7: strength = "Strong"
-                    elif abs_val >= 0.4: strength = "Moderate"
+                    if abs_val >= 0.9:
+                        strength = "Very Strong"
+                    elif abs_val >= 0.7:
+                        strength = "Strong"
+                    elif abs_val >= 0.4:
+                        strength = "Moderate"
 
                     # Build scatter data points for the frontend chart
                     pair = sample_df[[cols[i], cols[j]]].dropna()
                     scatter_data = [
-                        {"x": round(float(row[cols[i]]), 4), "y": round(float(row[cols[j]]), 4)}
+                        {
+                            "x": round(float(row[cols[i]]), 4),
+                            "y": round(float(row[cols[j]]), 4),
+                        }
                         for _, row in pair.iterrows()
                     ]
 
-                    results.append({
-                        "feature1": cols[i],
-                        "feature2": cols[j],
-                        "correlation": float(value),
-                        "direction": "Positive" if value > 0 else "Negative",
-                        "strength": strength,
-                        "scatterData": scatter_data,
-                    })
+                    results.append(
+                        {
+                            "feature1": cols[i],
+                            "feature2": cols[j],
+                            "correlation": float(value),
+                            "direction": "Positive" if value > 0 else "Negative",
+                            "strength": strength,
+                            "scatterData": scatter_data,
+                        }
+                    )
         return results
 
     def _categorical_analysis(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
@@ -295,41 +336,47 @@ class EDAEngine:
             counts = df[col].value_counts()
             top_ten = counts.head(10)
             n_rows = len(df)
-            
+
             # Entropy calculation
             probs = counts / n_rows
             entropy = float(-(probs * np.log2(probs + 1e-12)).sum())
             dominance = float(counts.iloc[0] / n_rows * 100) if not counts.empty else 0
-            
-            results.append({
-                "name": col,
-                "uniqueValues": int(df[col].nunique()),
-                "topValues": [{"name": str(k), "value": int(v)} for k, v in top_ten.items()],
-                "entropy": round(entropy, 3),
-                "dominance": round(dominance, 2)
-            })
+
+            results.append(
+                {
+                    "name": col,
+                    "uniqueValues": int(df[col].nunique()),
+                    "topValues": [
+                        {"name": str(k), "value": int(v)} for k, v in top_ten.items()
+                    ],
+                    "entropy": round(entropy, 3),
+                    "dominance": round(dominance, 2),
+                }
+            )
         return results
 
     def _get_missing_heatmap(self, df: pd.DataFrame) -> Dict[str, Any]:
-        sample = df.head(50) # Limit for UI performance
+        sample = df.head(50)  # Limit for UI performance
         return {
             "labels": list(df.columns),
             "rowLabels": list(sample.index.astype(str)),
-            "values": sample.isna().astype(int).values.tolist()
+            "values": sample.isna().astype(int).values.tolist(),
         }
 
     def _get_correlation_heatmap(self, df: pd.DataFrame) -> Dict[str, Any]:
         num = df.select_dtypes(include=[np.number])
         if num.shape[1] < 2:
             return {"labels": [], "values": []}
-        
-        corr = num.corr().fillna(0)
-        return {
-            "labels": list(corr.columns),
-            "values": corr.values.tolist()
-        }
 
-    def _calculate_quality_score(self, df: pd.DataFrame, missing: List[Dict[str, Any]], stats: List[Dict[str, Any]]) -> int:
+        corr = num.corr().fillna(0)
+        return {"labels": list(corr.columns), "values": corr.values.tolist()}
+
+    def _calculate_quality_score(
+        self,
+        df: pd.DataFrame,
+        missing: List[Dict[str, Any]],
+        stats: List[Dict[str, Any]],
+    ) -> int:
         score = 100
         if missing:
             total_missing_pct = sum(m["percentage"] for m in missing) / len(df.columns)
@@ -343,172 +390,244 @@ class EDAEngine:
 
         return int(max(0, min(100, score)))
 
-    def _generate_insights(self, df: pd.DataFrame, missing: List[Dict[str, Any]], stats: List[Dict[str, Any]], correlations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _generate_insights(
+        self,
+        df: pd.DataFrame,
+        missing: List[Dict[str, Any]],
+        stats: List[Dict[str, Any]],
+        correlations: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
         insights = []
 
         # Missing data insights
-        top_missing = sorted([m for m in missing if m["percentage"] > 5], key=lambda x: x["percentage"], reverse=True)
+        top_missing = sorted(
+            [m for m in missing if m["percentage"] > 5],
+            key=lambda x: x["percentage"],
+            reverse=True,
+        )
         if top_missing:
-            insights.append({
-                "type": "warning",
-                "title": "High Missing Data",
-                "desc": f"{top_missing[0]['name']} has {top_missing[0]['percentage']:.1f}% missing values.",
-                "action": "Use Data Cleaning to impute or drop missing rows before modelling."
-            })
+            insights.append(
+                {
+                    "type": "warning",
+                    "title": "High Missing Data",
+                    "desc": f"{top_missing[0]['name']} has {top_missing[0]['percentage']:.1f}% missing values.",
+                    "action": "Use Data Cleaning to impute or drop missing rows before modelling.",
+                }
+            )
 
         # Outlier insights
-        top_outliers = sorted([s for s in stats if s.get("outlierPercentage", 0) > 5], key=lambda x: x.get("outlierPercentage", 0), reverse=True)
+        top_outliers = sorted(
+            [s for s in stats if s.get("outlierPercentage", 0) > 5],
+            key=lambda x: x.get("outlierPercentage", 0),
+            reverse=True,
+        )
         if top_outliers:
-            insights.append({
-                "type": "info",
-                "title": "Outliers Detected",
-                "desc": f"{top_outliers[0]['name']} contains significant outliers ({top_outliers[0].get('outlierPercentage', 0):.1f}%).",
-                "action": "Apply IQR clipping or removal in Data Cleaning to reduce noise."
-            })
+            insights.append(
+                {
+                    "type": "info",
+                    "title": "Outliers Detected",
+                    "desc": f"{top_outliers[0]['name']} contains significant outliers ({top_outliers[0].get('outlierPercentage', 0):.1f}%).",
+                    "action": "Apply IQR clipping or removal in Data Cleaning to reduce noise.",
+                }
+            )
 
         # Correlation insights
         strong_corr = [c for c in correlations if abs(c.get("correlation", 0)) > 0.8]
         if strong_corr:
-            insights.append({
-                "type": "success",
-                "title": "Strong Patterns Found",
-                "desc": f"Strong correlation between {strong_corr[0]['feature1']} and {strong_corr[0]['feature2']} (r={strong_corr[0]['correlation']:.2f}).",
-                "action": "Consider removing one of these features to reduce multicollinearity."
-            })
+            insights.append(
+                {
+                    "type": "success",
+                    "title": "Strong Patterns Found",
+                    "desc": f"Strong correlation between {strong_corr[0]['feature1']} and {strong_corr[0]['feature2']} (r={strong_corr[0]['correlation']:.2f}).",
+                    "action": "Consider removing one of these features to reduce multicollinearity.",
+                }
+            )
 
         # Skewness insights
         high_skew = [s for s in stats if abs(s.get("skewness", 0)) > 2]
         if high_skew:
-            insights.append({
-                "type": "info",
-                "title": "Skewed Distributions",
-                "desc": f"{high_skew[0]['name']} is heavily skewed (skewness={high_skew[0].get('skewness', 0):.2f}).",
-                "action": "Apply log or Box-Cox transformation in Feature Engineering."
-            })
+            insights.append(
+                {
+                    "type": "info",
+                    "title": "Skewed Distributions",
+                    "desc": f"{high_skew[0]['name']} is heavily skewed (skewness={high_skew[0].get('skewness', 0):.2f}).",
+                    "action": "Apply log or Box-Cox transformation in Feature Engineering.",
+                }
+            )
 
         # Quality score insight
         missing_total = sum(m["missing"] for m in missing)
         if missing_total == 0 and not top_outliers:
-            insights.append({
-                "type": "success",
-                "title": "Clean Dataset",
-                "desc": "No missing values or significant outliers detected.",
-                "action": "Dataset is ready for Feature Engineering and ML training."
-            })
+            insights.append(
+                {
+                    "type": "success",
+                    "title": "Clean Dataset",
+                    "desc": "No missing values or significant outliers detected.",
+                    "action": "Dataset is ready for Feature Engineering and ML training.",
+                }
+            )
 
         return insights
 
-    def _get_trend_insights(self, df: pd.DataFrame, stats: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _get_trend_insights(
+        self, df: pd.DataFrame, stats: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
         trends = []
         for s in stats:
             if abs(s.get("skewness", 0)) > 1.5:
-                trends.append({
-                    "title": f"Distribution Bias in {s['name']}",
-                    "detail": f"This feature is heavily {s['trend']} (skew: {s['skewness']}). ML performance may improve with log scaling.",
-                    "confidence": "High"
-                })
-            
+                trends.append(
+                    {
+                        "title": f"Distribution Bias in {s['name']}",
+                        "detail": f"This feature is heavily {s['trend']} (skew: {s['skewness']}). ML performance may improve with log scaling.",
+                        "confidence": "High",
+                    }
+                )
+
             if s.get("modality") == "Multimodal":
-                trends.append({
-                    "title": f"Latent Groups in {s['name']}",
-                    "detail": f"{s['name']} shows multiple peaks, suggesting the presence of hidden subpopulations (e.g. bimodal distribution).",
-                    "confidence": "Medium"
-                })
-        
+                trends.append(
+                    {
+                        "title": f"Latent Groups in {s['name']}",
+                        "detail": f"{s['name']} shows multiple peaks, suggesting the presence of hidden subpopulations (e.g. bimodal distribution).",
+                        "confidence": "Medium",
+                    }
+                )
+
         if not trends:
-            trends.append({
-                "title": "General Numeric Stability",
-                "detail": "Most numeric features appear unimodal and relatively well-behaved without extreme skew.",
-                "confidence": "Low"
-            })
+            trends.append(
+                {
+                    "title": "General Numeric Stability",
+                    "detail": "Most numeric features appear unimodal and relatively well-behaved without extreme skew.",
+                    "confidence": "Low",
+                }
+            )
         return trends
 
-    def _get_segmentation_insights(self, df: pd.DataFrame, categorical: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _get_segmentation_insights(
+        self, df: pd.DataFrame, categorical: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
         segs = []
         for c in categorical:
             if c.get("dominance", 0) > 70:
                 top_val = c["topValues"][0]["name"] if c.get("topValues") else "Unknown"
-                segs.append({
-                    "title": f"High Imbalance in {c['name']}",
-                    "detail": f"Category '{top_val}' dominates with {c['dominance']}% of records. Data may be biased towards this group.",
-                    "confidence": "Very High"
-                })
-            
+                segs.append(
+                    {
+                        "title": f"High Imbalance in {c['name']}",
+                        "detail": f"Category '{top_val}' dominates with {c['dominance']}% of records. Data may be biased towards this group.",
+                        "confidence": "Very High",
+                    }
+                )
+
             if c.get("uniqueValues", 0) > 50 and df.shape[0] < 1000:
-                segs.append({
-                    "title": f"Sparse Labeling in {c['name']}",
-                    "detail": f"Too many unique categories ({c['uniqueValues']}) relative to sample size. Consider aggregation or embedding.",
-                    "confidence": "Medium"
-                })
-        
+                segs.append(
+                    {
+                        "title": f"Sparse Labeling in {c['name']}",
+                        "detail": f"Too many unique categories ({c['uniqueValues']}) relative to sample size. Consider aggregation or embedding.",
+                        "confidence": "Medium",
+                    }
+                )
+
         if not segs:
-            segs.append({
-                "title": "Balanced Segmentation",
-                "detail": "Categorical variables show reasonable distribution across groups with no extreme single-class dominance.",
-                "confidence": "Medium"
-            })
+            segs.append(
+                {
+                    "title": "Balanced Segmentation",
+                    "detail": "Categorical variables show reasonable distribution across groups with no extreme single-class dominance.",
+                    "confidence": "Medium",
+                }
+            )
         return segs
 
-    def _get_behavioral_insights(self, df: pd.DataFrame, stats: List[Dict[str, Any]], correlations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _get_behavioral_insights(
+        self,
+        df: pd.DataFrame,
+        stats: List[Dict[str, Any]],
+        correlations: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
         behavioral = []
-        
+
         # High correlation clusters
         strong_pairs = [c for c in correlations if abs(c.get("correlation", 0)) > 0.85]
         if strong_pairs:
             p1 = strong_pairs[0]
-            behavioral.append({
-                "title": "Information Redundancy",
-                "detail": f"{p1['feature1']} and {p1['feature2']} are highly correlated ({p1['correlation']:.2f}). Removing one may simplify models.",
-                "confidence": "Very High"
-            })
+            behavioral.append(
+                {
+                    "title": "Information Redundancy",
+                    "detail": f"{p1['feature1']} and {p1['feature2']} are highly correlated ({p1['correlation']:.2f}). Removing one may simplify models.",
+                    "confidence": "Very High",
+                }
+            )
 
         # Feature variance outliers
         outlier_total = sum(s.get("outlierCount", 0) for s in stats)
         if not df.empty and outlier_total > (df.shape[0] * 0.1):
-            behavioral.append({
-                "title": "High Volatility",
-                "detail": f"Dataset shows significant outliers ({outlier_total} total). May indicate unusual behavior or measurement noise.",
-                "confidence": "High"
-            })
+            behavioral.append(
+                {
+                    "title": "High Volatility",
+                    "detail": f"Dataset shows significant outliers ({outlier_total} total). May indicate unusual behavior or measurement noise.",
+                    "confidence": "High",
+                }
+            )
 
         if not behavioral:
-            behavioral.append({
-                "title": "Predictive Coherence",
-                "detail": "Variables show distinct informational boundaries with minimal obvious redundancy.",
-                "confidence": "Medium"
-            })
-                
+            behavioral.append(
+                {
+                    "title": "Predictive Coherence",
+                    "detail": "Variables show distinct informational boundaries with minimal obvious redundancy.",
+                    "confidence": "Medium",
+                }
+            )
+
         return behavioral
 
-    def _get_comparative_insights(self, df: pd.DataFrame, stats: List[Dict[str, Any]], categorical: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _get_comparative_insights(
+        self,
+        df: pd.DataFrame,
+        stats: List[Dict[str, Any]],
+        categorical: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
         comp = []
         # Numeric vs categorical simple insights
         if stats and categorical:
             s = stats[0]
             cat = categorical[0]
-            comp.append({
-                "title": f"Regional Variance in {s['name']}",
-                "detail": f"Values of {s['name']} show distinct grouping patterns when segmented by {cat['name']}.",
-                "confidence": "Medium"
-            })
-            
+            comp.append(
+                {
+                    "title": f"Regional Variance in {s['name']}",
+                    "detail": f"Values of {s['name']} show distinct grouping patterns when segmented by {cat['name']}.",
+                    "confidence": "Medium",
+                }
+            )
+
         if not comp:
-             comp.append({
-                "title": "Univariate Consistency",
-                "detail": "Data patterns are relatively stable across the primary feature dimensions.",
-                "confidence": "Low"
-            })
+            comp.append(
+                {
+                    "title": "Univariate Consistency",
+                    "detail": "Data patterns are relatively stable across the primary feature dimensions.",
+                    "confidence": "Low",
+                }
+            )
         return comp
 
     def _detect_date_columns(self, df: pd.DataFrame) -> List[str]:
-        return [col for col in df.columns if pd.api.types.is_datetime64_any_dtype(df[col])]
+        return [
+            col for col in df.columns if pd.api.types.is_datetime64_any_dtype(df[col])
+        ]
 
     def _get_type_counts(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
         counts = df.dtypes.value_counts().to_dict()
         return [{"name": str(k), "value": int(v)} for k, v in counts.items()]
 
-    def _get_quality_radar(self, score: int, missing: List[Dict[str, Any]], stats: List[Dict[str, Any]], df: pd.DataFrame) -> List[Dict[str, Any]]:
-        completeness = (100 - (sum(m["percentage"] for m in missing) / len(missing))) if missing else 100.0
+    def _get_quality_radar(
+        self,
+        score: int,
+        missing: List[Dict[str, Any]],
+        stats: List[Dict[str, Any]],
+        df: pd.DataFrame,
+    ) -> List[Dict[str, Any]]:
+        completeness = (
+            (100 - (sum(m["percentage"] for m in missing) / len(missing)))
+            if missing
+            else 100.0
+        )
         uniqueness = float(100 - (df.duplicated().sum() / max(len(df), 1) * 100))
         total_vals = len(df) * max(len(df.columns), 1)
         total_outliers = sum(s.get("outlierCount", 0) for s in stats)
@@ -516,10 +635,16 @@ class EDAEngine:
         avg_cv = sum(s.get("cv", 0) for s in stats) / max(len(stats), 1)
         consistency = float(max(0, score - (avg_cv / 10)))
         return [
-            {"subject": "Completeness", "A": round(max(0.0, min(100.0, completeness)), 1)},
-            {"subject": "Consistency",  "A": round(max(0.0, min(100.0, consistency)), 1)},
-            {"subject": "Validity",     "A": round(max(0.0, min(100.0, validity)), 1)},
-            {"subject": "Uniqueness",   "A": round(max(0.0, min(100.0, uniqueness)), 1)},
+            {
+                "subject": "Completeness",
+                "A": round(max(0.0, min(100.0, completeness)), 1),
+            },
+            {
+                "subject": "Consistency",
+                "A": round(max(0.0, min(100.0, consistency)), 1),
+            },
+            {"subject": "Validity", "A": round(max(0.0, min(100.0, validity)), 1)},
+            {"subject": "Uniqueness", "A": round(max(0.0, min(100.0, uniqueness)), 1)},
         ]
 
     def _recommendations(self, df: pd.DataFrame) -> List[str]:
@@ -527,7 +652,9 @@ class EDAEngine:
         recs = []
         missing_pct = df.isna().mean().mean() * 100
         if missing_pct > 5:
-            recs.append(f"Handle missing values ({missing_pct:.1f}% of cells are null).")
+            recs.append(
+                f"Handle missing values ({missing_pct:.1f}% of cells are null)."
+            )
         dup = int(df.duplicated().sum())
         if dup > 0:
             recs.append(f"Remove {dup} duplicate row(s) before modelling.")
@@ -539,9 +666,13 @@ class EDAEngine:
                 iqr = q3 - q1
                 n_out = int(((s < q1 - 1.5 * iqr) | (s > q3 + 1.5 * iqr)).sum())
                 if n_out / max(len(s), 1) > 0.05:
-                    recs.append(f"Column '{col}' has {n_out} outliers — consider capping or removal.")
+                    recs.append(
+                        f"Column '{col}' has {n_out} outliers — consider capping or removal."
+                    )
         if not recs:
-            recs.append("Dataset looks clean. Proceed with feature engineering and modelling.")
+            recs.append(
+                "Dataset looks clean. Proceed with feature engineering and modelling."
+            )
         return recs
 
     def _normality_test(self, series: "pd.Series") -> Dict[str, Any]:

@@ -14,10 +14,6 @@ services:
         sync: false
       - key: SECRET_KEY
         sync: false
-      - key: ENFORCE_API_KEY
-        value: "true"
-      - key: ENFORCE_TENANT_ISOLATION
-        value: "true"
       - key: ALLOW_CODE_EXECUTION
         value: "false"
       - key: ALLOWED_ORIGINS
@@ -34,10 +30,6 @@ services:
     envVars:
       - key: VITE_API_URL
         value: "https://datascience-assistant-backend.onrender.com"
-      - key: VITE_API_KEY
-        sync: false
-      - key: VITE_TENANT_ID
-        value: prod-tenant-1
     routes:
       - type: rewrite
         source: /*

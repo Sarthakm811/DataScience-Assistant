@@ -14,12 +14,13 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.runtime_compat import router as runtime_router
+from app.api.auth import router as auth_router
 from app.api.enhanced_query import router as enhanced_router
 from app.api.sessions import router as sessions_router
 from app.api.query import router as query_router
 from app.api.langchain_query import router as langchain_router
 from app.api.datasets import router as datasets_router
-from app.security import bind_tenant_context, require_api_key
+from app.security import bind_tenant_context
 from app.runtime_state import ml_engine
 from mcp.api_routes import router as mcp_router
 
@@ -76,19 +77,19 @@ def _allowed_origins() -> List[str]:
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins(),
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-Tenant-Id"],
+    allow_headers=["Content-Type"],
     max_age=600,
 )
 
 # Specialized routers must be registered BEFORE runtime_router to avoid
 # duplicate route shadowing (FastAPI matches first registered route).
 protected_dependencies = [
-    Depends(require_api_key),
     Depends(bind_tenant_context),
 ]
 
+app.include_router(auth_router, prefix="/api")
 app.include_router(sessions_router, prefix="/api", dependencies=protected_dependencies)
 app.include_router(query_router, prefix="/api", dependencies=protected_dependencies)
 app.include_router(langchain_router, prefix="/api", dependencies=protected_dependencies)
@@ -119,4 +120,5 @@ def health() -> Dict[str, Any]:
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -14,9 +14,11 @@ class Settings(BaseSettings):
 
     # Security
     secret_key: str = "change-me-in-production"
-    enforce_api_key: bool = True
     enforce_tenant_isolation: bool = True
     allow_code_execution: bool = False
+    access_token_expire_minutes: int = Field(default=30, ge=1, le=1440)
+    auth_cookie_secure: bool = False
+    auth_cookie_samesite: str = Field(default="lax", pattern="^(lax|strict|none)$")
 
     # Execution limits
     max_execution_time: int = Field(default=45, ge=1, le=3600)
@@ -25,6 +27,17 @@ class Settings(BaseSettings):
     max_upload_rows: int = Field(default=1_000_000, ge=1, le=10_000_000)
     max_upload_columns: int = Field(default=500, ge=1, le=10_000)
     max_image_pixels: int = Field(default=25_000_000, ge=1, le=100_000_000)
+
+    # In-memory tenant runtime limits
+    max_tenants: int = Field(default=100, ge=1, le=100_000)
+    max_datasets_per_tenant: int = Field(default=100, ge=1, le=100_000)
+    max_dataset_memory_mb_per_tenant: int = Field(default=512, ge=1, le=1_048_576)
+    max_models_per_tenant: int = Field(default=100, ge=1, le=100_000)
+    max_preprocessors_per_tenant: int = Field(default=100, ge=1, le=100_000)
+    max_chat_sessions_per_tenant: int = Field(default=100, ge=1, le=100_000)
+    max_chat_messages_per_session: int = Field(default=1000, ge=1, le=1_000_000)
+    tenant_eviction_mode: str = Field(default="lru", pattern="^(lru|ttl)$")
+    tenant_ttl_seconds: int = Field(default=3600, ge=1, le=31_536_000)
 
     # Vector DB
     vector_db_url: Optional[str] = None
@@ -43,12 +56,17 @@ class Settings(BaseSettings):
             "",
             "MISSING_GEMINI_API_KEY",
         }
-        if self.enforce_api_key and self.secret_key in weak_values:
-            raise ValueError("SECRET_KEY must be explicitly configured when API-key enforcement is enabled")
+        if self.secret_key in weak_values:
+            raise ValueError(
+                "SECRET_KEY must be explicitly configured for authentication"
+            )
         if self.secret_key in weak_values or self.gemini_api_key in weak_values:
             import logging
+
             logger = logging.getLogger(__name__)
-            logger.warning("Application initialized with a missing or default optional secret")
+            logger.warning(
+                "Application initialized with a missing or default optional secret"
+            )
         return self
 
 

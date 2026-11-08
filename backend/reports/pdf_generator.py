@@ -570,9 +570,7 @@ class EDAPDFReport:
                 for x in missing_data["Percentage"]
             ]
 
-            ax1.barh(
-                range(len(missing_data)), missing_data["Percentage"], color=colors
-            )
+            ax1.barh(range(len(missing_data)), missing_data["Percentage"], color=colors)
             ax1.set_yticks(range(len(missing_data)))
             ax1.set_yticklabels(missing_data.index, fontsize=9)
             ax1.set_xlabel("Missing Percentage (%)", fontsize=11, fontweight="bold")

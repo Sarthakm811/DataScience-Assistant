@@ -49,8 +49,6 @@ spec:
             secretKeyRef:
               name: api-secrets
               key: app-secret-key
-        - name: ENFORCE_API_KEY
-          value: "true"
         - name: ALLOW_CODE_EXECUTION
           value: "false"
         resources:

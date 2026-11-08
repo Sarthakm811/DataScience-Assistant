@@ -141,6 +141,7 @@ class StatisticalAnalyzer:
                 }
         except (ValueError, RuntimeError) as e:
             import logging
+
             logging.debug(f"Shapiro-Wilk test failed: {e}")
 
         # Kolmogorov-Smirnov test
@@ -153,6 +154,7 @@ class StatisticalAnalyzer:
             }
         except (ValueError, RuntimeError) as e:
             import logging
+
             logging.debug(f"KS test failed: {e}")
 
         # D'Agostino-Pearson test
@@ -166,6 +168,7 @@ class StatisticalAnalyzer:
                 }
         except (ValueError, RuntimeError) as e:
             import logging
+
             logging.debug(f"D'Agostino-Pearson test failed: {e}")
 
         return results
@@ -271,7 +274,6 @@ class StatisticalAnalyzer:
                 "high" if top5_pct > 80 else "moderate" if top5_pct > 50 else "low"
             ),
         }
-
 
     def get_comprehensive_report(self) -> Dict:
         """Get complete statistical analysis"""

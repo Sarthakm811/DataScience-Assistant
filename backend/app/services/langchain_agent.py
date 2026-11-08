@@ -68,8 +68,7 @@ class LangChainAgent:
     def _create_agent(self) -> AgentExecutor:
         """Create ReAct agent with tools"""
 
-        prompt = PromptTemplate.from_template(
-            """
+        prompt = PromptTemplate.from_template("""
 You are an expert data science research assistant. You have access to Kaggle datasets and can execute Python code for analysis.
 
 Available tools:
@@ -92,8 +91,7 @@ Begin!
 
 Question: {input}
 Thought: {agent_scratchpad}
-"""
-        )
+""")
 
         agent = create_react_agent(llm=self.llm, tools=self.tools, prompt=prompt)
 

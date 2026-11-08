@@ -51,6 +51,8 @@ backend/.pytest_cache/
 backend/.ruff_cache/
 backend/.coverage
 backend/htmlcov/
+frontend/dev.log
+*.env.test
 
 # Local model/training artifacts
 catboost_info/
@@ -63,6 +65,10 @@ backend/render_venv/
 backend/ruff.txt
 backend/ruff2.txt
 backend/ruff_output.txt
+
+# Local verification scripts
+verify*.py
+test_*.py
 
 # Secrets
 secrets/

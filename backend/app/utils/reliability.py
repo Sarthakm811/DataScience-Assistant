@@ -15,7 +15,9 @@ from fastapi import HTTPException
 T = TypeVar("T")
 
 
-def validate_non_empty_text(value: str, field_name: str, max_length: int | None = None) -> str:
+def validate_non_empty_text(
+    value: str, field_name: str, max_length: int | None = None
+) -> str:
     """Validate text at service boundaries that do not use a Pydantic model."""
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must not be empty")

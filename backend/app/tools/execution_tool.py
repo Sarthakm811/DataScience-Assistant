@@ -27,7 +27,9 @@ class ExecutionTool:
                 "error": "Code execution is disabled by server policy. Set ALLOW_CODE_EXECUTION=true to enable.",
             }
         if os.getenv("EXECUTION_SANDBOX_CONFIRMED", "").lower() != "true":
-            logger.error("Code execution requested without a confirmed isolated sandbox")
+            logger.error(
+                "Code execution requested without a confirmed isolated sandbox"
+            )
             return {
                 "status": "disabled",
                 "error": "Code execution requires an explicitly configured isolated sandbox.",

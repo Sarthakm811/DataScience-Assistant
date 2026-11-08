@@ -15,24 +15,20 @@ function DatasetSearch({ setDataset }) {
     const [ uploadSuccess, setUploadSuccess ] = useState(false)
 
     // Kaggle API credentials
-    const [ kaggleUsername, setKaggleUsername ] = useState(localStorage.getItem('kaggle_username') || '')
-    const [ kaggleKey, setKaggleKey ] = useState(localStorage.getItem('kaggle_key') || '')
+    const [ kaggleUsername, setKaggleUsername ] = useState('')
+    const [ kaggleKey, setKaggleKey ] = useState('')
     const [ showKey, setShowKey ] = useState(false)
     const [ showSettings, setShowSettings ] = useState(false)
     const [ credentialsSaved, setCredentialsSaved ] = useState(false)
 
     // Save Kaggle credentials
     const saveCredentials = () => {
-        localStorage.setItem('kaggle_username', kaggleUsername)
-        localStorage.setItem('kaggle_key', kaggleKey)
         setCredentialsSaved(true)
         setTimeout(() => setCredentialsSaved(false), 2000)
     }
 
     // Clear credentials
     const clearCredentials = () => {
-        localStorage.removeItem('kaggle_username')
-        localStorage.removeItem('kaggle_key')
         setKaggleUsername('')
         setKaggleKey('')
     }

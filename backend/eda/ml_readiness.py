@@ -111,13 +111,18 @@ class MLReadinessAnalyzer:
         except (ValueError, TypeError, RuntimeError) as e:
             # Fallback to correlation
             import logging
-            logging.warning(f"Mutual information calculation failed: {e}. Using correlation instead.")
+
+            logging.warning(
+                f"Mutual information calculation failed: {e}. Using correlation instead."
+            )
             for col in self.numeric_cols:
                 try:
                     corr = abs(self.df[col].corr(y))
                     scores[col] = float(corr) if not np.isnan(corr) else 0.0
                 except (ValueError, TypeError) as col_err:
-                    logging.debug(f"Failed to calculate correlation for {col}: {col_err}")
+                    logging.debug(
+                        f"Failed to calculate correlation for {col}: {col_err}"
+                    )
                     scores[col] = 0.0
 
         return scores
@@ -139,6 +144,7 @@ class MLReadinessAnalyzer:
                 scores[col] = float(score)
             except (ValueError, TypeError) as e:
                 import logging
+
                 logging.debug(f"Failed to score categorical feature {col}: {e}")
                 scores[col] = 0.0
 

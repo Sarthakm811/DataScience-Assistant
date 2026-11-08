@@ -30,7 +30,9 @@ async def query_with_langchain(req: QueryRequest):
         agent = LangChainAgent()
         context = {"dataset_id": req.dataset_id} if req.dataset_id else {}
         if req.dataset_id and req.dataset_id in DATASETS:
-            context["dataset_context"] = format_dataframe_context(DATASETS[req.dataset_id])
+            context["dataset_context"] = format_dataframe_context(
+                DATASETS[req.dataset_id]
+            )
         result = await agent.run(req.query, context)
 
         return QueryResponse(

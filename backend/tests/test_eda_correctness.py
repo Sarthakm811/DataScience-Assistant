@@ -5,16 +5,19 @@ import httpx
 import numpy as np
 import pandas as pd
 import pytest
-from scipy.stats import t as t_dist
+from scipy.stats import chi2_contingency, f_oneway, pearsonr, t as t_dist
+from statsmodels.stats.weightstats import ttest_ind as statsmodels_ttest_ind
 
 from app.main import app
-from app.utils.config import settings
+from auth_helpers import cookie_headers
 
 
 def _request(method: str, url: str, **kwargs) -> httpx.Response:
     async def _run():
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver"
+        ) as client:
             return await client.request(method, url, **kwargs)
 
     return asyncio.run(_run())
@@ -22,10 +25,7 @@ def _request(method: str, url: str, **kwargs) -> httpx.Response:
 
 @pytest.fixture
 def auth_headers():
-    return {
-        "X-API-Key": settings.secret_key,
-        "X-Tenant-Id": "public",
-    }
+    return cookie_headers("eda")
 
 
 def _upload_csv(auth_headers: dict, csv_text: str, filename: str = "data.csv") -> str:
@@ -64,7 +64,11 @@ def test_eda_insight_payload_contract(auth_headers):
         "POST",
         "/api/analysis/auto",
         headers={**auth_headers, "Content-Type": "application/json"},
-        json={"session_id": "contract-test", "dataset_id": dataset_id, "analysis_type": "eda"},
+        json={
+            "session_id": "contract-test",
+            "dataset_id": dataset_id,
+            "analysis_type": "eda",
+        },
     )
     assert response.status_code == 200, response.text
 
@@ -85,7 +89,12 @@ def test_eda_insight_payload_contract(auth_headers):
         if "action" in insight:
             assert isinstance(insight["action"], str)
 
-    for key in ["trendInsights", "segmentationInsights", "behavioralInsights", "comparativeInsights"]:
+    for key in [
+        "trendInsights",
+        "segmentationInsights",
+        "behavioralInsights",
+        "comparativeInsights",
+    ]:
         arr = eda.get(key)
         assert isinstance(arr, list)
         assert len(arr) > 0
@@ -109,25 +118,31 @@ def test_eda_correlation_ground_truth(auth_headers):
         "POST",
         "/api/analysis/auto",
         headers={**auth_headers, "Content-Type": "application/json"},
-        json={"session_id": "corr-test", "dataset_id": dataset_id, "analysis_type": "eda"},
+        json={
+            "session_id": "corr-test",
+            "dataset_id": dataset_id,
+            "analysis_type": "eda",
+        },
     )
     assert response.status_code == 200, response.text
 
     correlations = response.json()["eda"]["correlations"]
     assert len(correlations) == 3
 
-    by_pair = {
-        tuple(sorted([c["feature1"], c["feature2"]])): c
-        for c in correlations
-    }
+    by_pair = {tuple(sorted([c["feature1"], c["feature2"]])): c for c in correlations}
 
     xy = by_pair[("x", "y")]
     xz = by_pair[("x", "z")]
     yz = by_pair[("y", "z")]
 
-    assert math.isclose(xy["correlation"], 1.0, rel_tol=0.0, abs_tol=1e-12)
+    expected_xy, _ = pearsonr(x, y)
+    expected_xz, _ = pearsonr(x, z)
+    expected_yz, _ = pearsonr(y, z)
+    assert math.isclose(xy["correlation"], expected_xy, rel_tol=0.0, abs_tol=1e-12)
     assert math.isclose(xz["correlation"], -1.0, rel_tol=0.0, abs_tol=1e-12)
     assert math.isclose(yz["correlation"], -1.0, rel_tol=0.0, abs_tol=1e-12)
+    assert math.isclose(xz["correlation"], expected_xz, rel_tol=0.0, abs_tol=1e-12)
+    assert math.isclose(yz["correlation"], expected_yz, rel_tol=0.0, abs_tol=1e-12)
 
     for corr in correlations:
         assert len(corr.get("scatterData", [])) == len(df)
@@ -198,9 +213,26 @@ def test_statistics_math_ground_truth(auth_headers):
     assert t_test["group_b"] == "B"
     assert math.isclose(t_test["mean_a"], 3.0, rel_tol=0.0, abs_tol=1e-12)
     assert math.isclose(t_test["mean_b"], 8.0, rel_tol=0.0, abs_tol=1e-12)
-    assert t_test["p_value"] < 0.05
+    expected_t, expected_p, _ = statsmodels_ttest_ind(
+        np.array([1, 2, 3, 4, 5], dtype=float),
+        np.array([6, 7, 8, 9, 10], dtype=float),
+        usevar="unequal",
+    )
+    assert math.isclose(t_test["t_statistic"], expected_t, rel_tol=0.0, abs_tol=1e-12)
+    assert math.isclose(t_test["p_value"], expected_p, rel_tol=0.0, abs_tol=1e-12)
 
     chi = hyp["chi_square"]
     assert chi["group_column"] == "group"
     assert chi["categorical_column"] == "category"
     assert chi["contingency_shape"] == [2, 2]
+    expected_chi, expected_chi_p, _, _ = chi2_contingency(np.array([[3, 2], [2, 3]]))
+    assert math.isclose(chi["chi2_statistic"], expected_chi, rel_tol=0.0, abs_tol=1e-12)
+    assert math.isclose(chi["p_value"], expected_chi_p, rel_tol=0.0, abs_tol=1e-12)
+
+    anova = hyp["anova"]
+    expected_f, expected_f_p = f_oneway(
+        np.array([1, 2, 3, 4, 5], dtype=float),
+        np.array([6, 7, 8, 9, 10], dtype=float),
+    )
+    assert math.isclose(anova["f_statistic"], expected_f, rel_tol=0.0, abs_tol=1e-12)
+    assert math.isclose(anova["p_value"], expected_f_p, rel_tol=0.0, abs_tol=1e-12)

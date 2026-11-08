@@ -10,15 +10,12 @@ from app.api.langchain_query import query_with_langchain
 from app.runtime_state import DATASETS, set_current_tenant
 from app.services import agent_service as agent_service_module
 from app.services.agent_service import AgentService
-from app.utils.config import settings
+from auth_helpers import cookie_headers
 
 
 @pytest.fixture
 def auth_headers():
-    return {
-        "X-API-Key": settings.secret_key,
-        "X-Tenant-Id": "tenant-a",
-    }
+    return cookie_headers("query")
 
 
 def _seed_dataset(dataset_id: str, df: pd.DataFrame) -> None:

@@ -1,12 +1,11 @@
 import os
 from typing import Dict, Any, List
-from kaggle.api.kaggle_api_extended import KaggleApi
 from app.utils.config import settings
 
 
 class KaggleTool:
     def __init__(self):
-        self.api = KaggleApi()
+        self.api = None
         self._authenticated = False
 
     def _ensure_authenticated(self):
@@ -15,25 +14,31 @@ class KaggleTool:
             return
 
         try:
+            from kaggle.api.kaggle_api_extended import KaggleApi
+
+            self.api = KaggleApi()
             if settings.kaggle_username and settings.kaggle_key:
                 os.environ["KAGGLE_USERNAME"] = settings.kaggle_username
                 os.environ["KAGGLE_KEY"] = settings.kaggle_key
-            
+
             # If no credentials found in env/settings, this will look for kaggle.json
             self.api.authenticate()
             import logging
+
             logging.getLogger(__name__).info("Kaggle API successfully authenticated.")
             self._authenticated = True
         except Exception as exc:
             import logging
+
             logging.getLogger(__name__).warning(
                 "Kaggle authentication failed or missing: error_type=%s",
                 type(exc).__name__,
             )
             from fastapi import HTTPException
+
             raise HTTPException(
-                status_code=503, 
-                detail="Kaggle API is not authenticated. Please provide credentials in environment variables."
+                status_code=503,
+                detail="Kaggle API is not authenticated. Please provide credentials in environment variables.",
             )
 
     async def search_datasets(self, query: str, page: int = 1) -> List[Dict[str, Any]]:
@@ -63,6 +68,7 @@ class KaggleTool:
             }
         except Exception as exc:
             import logging
+
             logging.getLogger(__name__).error(
                 "Kaggle metadata lookup failed: error_type=%s",
                 type(exc).__name__,

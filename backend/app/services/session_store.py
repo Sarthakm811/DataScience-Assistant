@@ -18,7 +18,9 @@ class SessionStore:
     def __init__(self, history_limit: int = 50):
         self._lock = threading.Lock()
         self._sessions: Dict[str, Dict[str, Any]] = {}
-        self._history: Dict[str, deque] = defaultdict(lambda: deque(maxlen=history_limit))
+        self._history: Dict[str, deque] = defaultdict(
+            lambda: deque(maxlen=history_limit)
+        )
 
     # ── Session helpers ──────────────────────────────────────────────────────
 

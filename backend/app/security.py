@@ -1,30 +1,71 @@
 from __future__ import annotations
 
-from fastapi import Header, HTTPException
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Optional
+from uuid import uuid4
+
+import jwt
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
+from fastapi import Cookie, Depends, HTTPException
 
 from app.runtime_state import set_current_tenant
 from app.utils.config import settings
 
-
-def require_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> None:
-    """Require a shared API key for all runtime API calls."""
-    if not settings.enforce_api_key:
-        return
-    if not x_api_key or x_api_key != settings.secret_key:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+_PASSWORDS = PasswordHasher()
+_USERS: Dict[str, Dict[str, str]] = {}
+_USERNAME_TO_ID: Dict[str, str] = {}
+_COOKIE_NAME = "access_token"
 
 
-def bind_tenant_context(x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id")):
-    """Bind request-scoped tenant context used by in-memory stores.
+def create_user(username: str, password: str) -> str:
+    normalized = username.casefold()
+    if normalized in _USERNAME_TO_ID:
+        raise ValueError("Username is already registered")
+    user_id = str(uuid4())
+    _USERS[user_id] = {
+        "username": username,
+        "password_hash": _PASSWORDS.hash(password),
+    }
+    _USERNAME_TO_ID[normalized] = user_id
+    return user_id
 
-    We set the ContextVar but intentionally skip the reset — FastAPI creates a
-    fresh copy of the context for every request so there is no leak between
-    requests, and attempting to reset a token that was created in a different
-    async context raises a ValueError on sync (threadpool) routes.
-    """
-    tenant_id = x_tenant_id or "public"
-    if settings.enforce_tenant_isolation and not x_tenant_id:
-        raise HTTPException(status_code=400, detail="X-Tenant-Id header is required")
 
-    set_current_tenant(tenant_id)
-    yield
+def authenticate_user(username: str, password: str) -> Optional[str]:
+    user_id = _USERNAME_TO_ID.get(username.casefold())
+    if user_id is None:
+        return None
+    try:
+        _PASSWORDS.verify(_USERS[user_id]["password_hash"], password)
+    except (InvalidHashError, VerificationError, VerifyMismatchError):
+        return None
+    return user_id
+
+
+def issue_access_token(user_id: str) -> str:
+    expires = datetime.now(timezone.utc) + timedelta(
+        minutes=settings.access_token_expire_minutes
+    )
+    return jwt.encode(
+        {"sub": user_id, "exp": expires},
+        settings.secret_key,
+        algorithm="HS256",
+    )
+
+
+def require_auth(access_token: str | None = Cookie(default=None)) -> str:
+    if not access_token:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        payload = jwt.decode(access_token, settings.secret_key, algorithms=["HS256"])
+        user_id = payload.get("sub")
+    except jwt.InvalidTokenError as exc:
+        raise HTTPException(status_code=401, detail="Invalid or expired token") from exc
+    if not isinstance(user_id, str) or user_id not in _USERS:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    return user_id
+
+
+async def bind_tenant_context(user_id: str = Depends(require_auth)):
+    """Bind the tenant to the authenticated user; client headers are ignored."""
+    set_current_tenant(user_id)

@@ -41,7 +41,9 @@ class AgentService:
                 else:
                     if self.kaggle_tool is None:
                         self.kaggle_tool = KaggleTool()
-                    dataset_summary = await self.kaggle_tool.get_dataset_summary(dataset_id)
+                    dataset_summary = await self.kaggle_tool.get_dataset_summary(
+                        dataset_id
+                    )
                 session_data["current_dataset"] = dataset_id
 
             prompt = self._build_prompt(query, dataset_summary, history)

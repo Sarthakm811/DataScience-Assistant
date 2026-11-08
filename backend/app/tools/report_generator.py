@@ -28,12 +28,18 @@ class ReportGenerator:
         missing = eda.get("missing_data", analysis_results.get("missing_data", {}))
         correlations = eda.get("correlations", analysis_results.get("correlations", {}))
         outliers = eda.get("outliers", analysis_results.get("outliers", {}))
-        distributions = eda.get("distributions", analysis_results.get("distributions", {}))
+        distributions = eda.get(
+            "distributions", analysis_results.get("distributions", {})
+        )
 
         total_missing = int(missing.get("total_missing", 0)) if missing else 0
-        high_corr_count = len(correlations.get("high_correlations", [])) if correlations else 0
+        high_corr_count = (
+            len(correlations.get("high_correlations", [])) if correlations else 0
+        )
         outlier_feature_count = len(outliers) if isinstance(outliers, dict) else 0
-        distribution_feature_count = len(distributions) if isinstance(distributions, dict) else 0
+        distribution_feature_count = (
+            len(distributions) if isinstance(distributions, dict) else 0
+        )
 
         # Cover and metadata
         report.append("# Data Science Analysis Report")
@@ -65,7 +71,9 @@ class ReportGenerator:
         # Executive summary
         report.append("## 1. Executive Summary")
         if "insights" in analysis_results and analysis_results["insights"]:
-            report.append("> This section contains AI-generated interpretation of the analysis results.")
+            report.append(
+                "> This section contains AI-generated interpretation of the analysis results."
+            )
             report.append("")
             report.append(str(analysis_results["insights"]).strip())
         else:
@@ -81,7 +89,9 @@ class ReportGenerator:
         report.append(f"| Missing Values | {total_missing:,} |")
         report.append(f"| High Correlation Pairs | {high_corr_count:,} |")
         report.append(f"| Features with Outliers | {outlier_feature_count:,} |")
-        report.append(f"| Features with Distribution Stats | {distribution_feature_count:,} |")
+        report.append(
+            f"| Features with Distribution Stats | {distribution_feature_count:,} |"
+        )
         report.append(f"| Total Visual Assets | {len(visual_assets):,} |")
         report.append("")
 
@@ -90,9 +100,13 @@ class ReportGenerator:
             report.append("## 3. Dataset Overview")
             report.append(f"- **Rows:** {rows}")
             report.append(f"- **Columns:** {cols}")
-            report.append(f"- **Memory:** {float(basic_info.get('memory_usage_mb', 0)):.2f} MB")
+            report.append(
+                f"- **Memory:** {float(basic_info.get('memory_usage_mb', 0)):.2f} MB"
+            )
             if basic_info.get("columns"):
-                report.append(f"- **Column Names:** {', '.join(map(str, basic_info['columns']))}")
+                report.append(
+                    f"- **Column Names:** {', '.join(map(str, basic_info['columns']))}"
+                )
             report.append("")
 
         # Auto EDA natural-language summary
@@ -104,13 +118,26 @@ class ReportGenerator:
             report.append("")
 
         # Summary statistics
-        summary_stats = eda.get("summary_stats", analysis_results.get("summary_stats", {}))
+        summary_stats = eda.get(
+            "summary_stats", analysis_results.get("summary_stats", {})
+        )
         if summary_stats:
             report.append("## 5. Summary Statistics")
             report.append("Key statistical measures for numeric features.")
             for feature, stats in summary_stats.items():
                 report.append(f"### {feature}")
-                for key in ["count", "mean", "std", "min", "25%", "50%", "75%", "max", "skewness", "kurtosis"]:
+                for key in [
+                    "count",
+                    "mean",
+                    "std",
+                    "min",
+                    "25%",
+                    "50%",
+                    "75%",
+                    "max",
+                    "skewness",
+                    "kurtosis",
+                ]:
                     if key in stats:
                         value = stats[key]
                         report.append(f"- **{key}:** {self._fmt_num(value)}")
@@ -119,7 +146,9 @@ class ReportGenerator:
         # Missing data
         if missing:
             report.append("## 6. Data Quality")
-            report.append(f"- **Total missing values:** {int(missing.get('total_missing', 0))}")
+            report.append(
+                f"- **Total missing values:** {int(missing.get('total_missing', 0))}"
+            )
             columns_with_missing = missing.get("columns_with_missing", {})
             if columns_with_missing:
                 report.append("### Missing Values by Column")
@@ -146,9 +175,13 @@ class ReportGenerator:
                         f"| {item.get('feature1', '')} | {item.get('feature2', '')} | {float(item.get('correlation', 0)):.4f} |"
                     )
             else:
-                report.append("- No strong pairwise correlations identified above threshold.")
+                report.append(
+                    "- No strong pairwise correlations identified above threshold."
+                )
 
-            corr_assets = self._collect_eda_visual_assets(eda, ["correlation_visualizations"])
+            corr_assets = self._collect_eda_visual_assets(
+                eda, ["correlation_visualizations"]
+            )
             if corr_assets:
                 report.append("### Correlation Charts")
                 for path in corr_assets:
@@ -161,7 +194,9 @@ class ReportGenerator:
         # Distribution analysis
         if distributions:
             report.append("## 8. Distribution Analysis")
-            report.append("| Feature | Mean | Median | Std | Min | Max | Unique Values |")
+            report.append(
+                "| Feature | Mean | Median | Std | Min | Max | Unique Values |"
+            )
             report.append("|---|---:|---:|---:|---:|---:|---:|")
             for feature, item in distributions.items():
                 report.append(
@@ -176,7 +211,9 @@ class ReportGenerator:
                     )
                 )
 
-            dist_assets = self._collect_eda_visual_assets(eda, ["distribution_visualizations"])
+            dist_assets = self._collect_eda_visual_assets(
+                eda, ["distribution_visualizations"]
+            )
             if dist_assets:
                 report.append("### Distribution Charts")
                 for path in dist_assets:
@@ -189,7 +226,9 @@ class ReportGenerator:
         # Outlier analysis
         report.append("## 9. Outlier Analysis")
         if outliers:
-            report.append("| Feature | Outlier Count | Outlier % | Lower Bound | Upper Bound |")
+            report.append(
+                "| Feature | Outlier Count | Outlier % | Lower Bound | Upper Bound |"
+            )
             report.append("|---|---:|---:|---:|---:|")
             for col, item in outliers.items():
                 report.append(
@@ -206,12 +245,16 @@ class ReportGenerator:
         report.append("")
 
         # Categorical analysis
-        categorical = eda.get("categorical_analysis", analysis_results.get("categorical_analysis", {}))
+        categorical = eda.get(
+            "categorical_analysis", analysis_results.get("categorical_analysis", {})
+        )
         if categorical:
             report.append("## 10. Categorical Analysis")
             for col, item in categorical.items():
                 report.append(f"### {col}")
-                report.append(f"- **Unique values:** {int(item.get('unique_values', 0))}")
+                report.append(
+                    f"- **Unique values:** {int(item.get('unique_values', 0))}"
+                )
                 report.append(f"- **Missing:** {int(item.get('missing', 0))}")
                 most_common = item.get("most_common", {})
                 if most_common:
@@ -227,13 +270,17 @@ class ReportGenerator:
             report.append(f"- **Task Type:** {ml.get('task_type', 'N/A')}")
             report.append(f"- **Best Model:** {ml.get('best_model', 'N/A')}")
             if "best_score" in ml:
-                report.append(f"- **Best Score:** {self._fmt_num(ml.get('best_score'))}")
+                report.append(
+                    f"- **Best Score:** {self._fmt_num(ml.get('best_score'))}"
+                )
             report.append("")
 
         # All visuals/charts/graphs/dashboards
         report.append("## 12. Visual Assets")
         if visual_assets:
-            report.append("The following generated assets are included as part of this analysis:")
+            report.append(
+                "The following generated assets are included as part of this analysis:"
+            )
             for path in visual_assets:
                 asset_path = Path(str(path))
                 title = asset_path.stem.replace("_", " ").title()
@@ -248,7 +295,11 @@ class ReportGenerator:
         # Raw artifacts (compact JSON) for traceability
         report.append("## 13. Appendix: Raw Analysis Snapshot")
         report.append("```json")
-        report.append(json.dumps(self._build_raw_snapshot(analysis_results), indent=2, default=str))
+        report.append(
+            json.dumps(
+                self._build_raw_snapshot(analysis_results), indent=2, default=str
+            )
+        )
         report.append("```")
         report.append("")
         report.append("---")
@@ -284,7 +335,14 @@ class ReportGenerator:
             _extend_paths(eda.get("correlation_visualizations", []))
 
         # Generic buckets from present/future modules
-        for key in ["visualizations", "charts", "graphs", "dashboards", "artifacts", "images"]:
+        for key in [
+            "visualizations",
+            "charts",
+            "graphs",
+            "dashboards",
+            "artifacts",
+            "images",
+        ]:
             value = analysis_results.get(key)
             if isinstance(value, list):
                 _extend_paths(value)
@@ -300,7 +358,9 @@ class ReportGenerator:
                 deduped.append(path)
         return deduped
 
-    def _collect_eda_visual_assets(self, eda: Dict[str, Any], keys: List[str]) -> List[str]:
+    def _collect_eda_visual_assets(
+        self, eda: Dict[str, Any], keys: List[str]
+    ) -> List[str]:
         assets: List[str] = []
         for key in keys:
             value = eda.get(key, []) if isinstance(eda, dict) else []
@@ -328,7 +388,9 @@ class ReportGenerator:
             "ml_results",
             "eda",
         ]
-        return {k: analysis_results.get(k) for k in keys_to_keep if k in analysis_results}
+        return {
+            k: analysis_results.get(k) for k in keys_to_keep if k in analysis_results
+        }
 
     def generate_notebook(self, code: str, job_id: str) -> str:
         """Generate Jupyter notebook"""

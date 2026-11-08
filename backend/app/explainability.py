@@ -14,9 +14,19 @@ class ModelExplainer:
     def __init__(self, model_bundle: Dict[str, Any]):
         # main.py stores {model, scaler, feature_names}
         self.model_bundle = model_bundle
-        self.model = model_bundle.get("model") if isinstance(model_bundle, dict) else model_bundle
-        self.scaler = model_bundle.get("scaler") if isinstance(model_bundle, dict) else None
-        self.feature_names = model_bundle.get("feature_names", []) if isinstance(model_bundle, dict) else []
+        self.model = (
+            model_bundle.get("model")
+            if isinstance(model_bundle, dict)
+            else model_bundle
+        )
+        self.scaler = (
+            model_bundle.get("scaler") if isinstance(model_bundle, dict) else None
+        )
+        self.feature_names = (
+            model_bundle.get("feature_names", [])
+            if isinstance(model_bundle, dict)
+            else []
+        )
 
     def _prepare_features(self, df: pd.DataFrame) -> pd.DataFrame:
         data = df.copy()
@@ -82,7 +92,9 @@ class ModelExplainer:
             }
         except Exception as exc:
             return {
-                "feature_importance": self.get_feature_importance().get("feature_importance", []),
+                "feature_importance": self.get_feature_importance().get(
+                    "feature_importance", []
+                ),
                 "warning": f"SHAP unavailable or failed: {exc}",
             }
 

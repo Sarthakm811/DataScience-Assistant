@@ -11,6 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GEMINI_API_KEY: test-key
+      KAGGLE_USERNAME: test-user
+      KAGGLE_KEY: test-key
       DATABASE_URL: sqlite:///test.db
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
     steps:
@@ -31,7 +33,7 @@ jobs:
         run: |
           cd backend
           # disable the langsmith pytest plugin in CI to prevent external initialization
-          pytest -p no:langsmith_plugin tests/ -v
+          pytest -p no:langsmith_plugin -p pytest_asyncio.plugin -p pytest_cov.plugin tests/ -v --cov=app --cov-report=xml:coverage.xml
       
       - name: Upload coverage (if available)
         if: always()
@@ -60,52 +62,24 @@ jobs:
       - name: Run flake8
         run: cd backend && flake8 . --config setup.cfg
 
-  build-images:
+  frontend:
     runs-on: ubuntu-latest
-    needs: [test-backend, lint-backend]
-    if: github.ref == 'refs/heads/main' && secrets.REGISTRY_USERNAME != ''
     steps:
       - uses: actions/checkout@v3
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-      
-      - name: Login to Container Registry
-        uses: docker/login-action@v2
-        with:
-          registry: ${{ secrets.REGISTRY_URL }}
-          username: ${{ secrets.REGISTRY_USERNAME }}
-          password: ${{ secrets.REGISTRY_PASSWORD }}
-      
-      - name: Build and push backend
-        uses: docker/build-push-action@v4
-        with:
-          context: ./backend
-          push: true
-          tags: ${{ secrets.REGISTRY_URL }}/ds-agent-backend:${{ github.sha }}
-      
-      - name: Build and push executor
-        uses: docker/build-push-action@v4
-        with:
-          context: ./executor
-          push: true
-          tags: ${{ secrets.REGISTRY_URL }}/ds-agent-executor:${{ github.sha }}
-      
-      - name: Build and push frontend
-        uses: docker/build-push-action@v4
-        with:
-          context: ./frontend
-          push: true
-          tags: ${{ secrets.REGISTRY_URL }}/ds-agent-frontend:${{ github.sha }}
 
-  deploy:
-    runs-on: ubuntu-latest
-    needs: build-images
-    if: github.ref == 'refs/heads/main' && secrets.REGISTRY_USERNAME != ''
-    steps:
-      - uses: actions/checkout@v3
-      
-      - name: Deploy to Kubernetes
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
         run: |
-          echo "Deploy step - configure kubectl and apply manifests"
-          # kubectl apply -f infra/k8s/
+          npm ci --prefix frontend
+
+      - name: Run ESLint
+        run: cd frontend && npx eslint .
+
+      - name: Build frontend
+        run: npm --prefix frontend run build
